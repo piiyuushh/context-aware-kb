@@ -30,7 +30,10 @@
 - search tsvector (generated from title + content_md)
 - created_at, updated_at timestamptz
 
-Index: GIN on search. Index on (user_id, updated_at).
+Index: GIN on search. Index on (user_id, updated_at). Unique index on
+(user_id, source, source_ref) — the identity of a synced note, so a re-import
+upserts instead of duplicating. Local notes have a null `source_ref` and SQL
+treats nulls as distinct, so they are never constrained by it.
 
 ### tags
 - id uuid pk
@@ -72,6 +75,25 @@ only; the graph API reads both.
 
 Index on (user_id, created_at).
 
+`stats` holds the progress counters (`total`, `processed`, `imported`,
+`updated`, `skipped`, `failed`); it defaults to `{}` and the API fills missing
+counters with zero. The worker checkpoints it while an import runs and writes the
+final value with `finished_at` when it becomes `done` or `failed`.
+
+### github_repo_imports
+- id uuid pk
+- user_id uuid fk users
+- repo_full_name text
+- branch text
+- last_synced_sha text null
+- created_at, updated_at timestamptz
+- unique (user_id, repo_full_name)
+
+Records which repositories a user imports and the branch they follow. A push
+webhook reads it back by `repo_full_name` (indexed) to find everyone who should
+re-sync; `last_synced_sha` is the head commit at the end of the last import
+(recorded for display/auditing; nothing reads it to short-circuit a sync yet).
+
 ### Constraints and defaults
 
 - Primary keys are `uuid default gen_random_uuid()` (built into Postgres 13+).
@@ -109,7 +131,8 @@ same Postgres. It owns a `pgboss` schema that it creates and migrates itself on
 startup, so the queue is **not** managed by node-pg-migrate — there is no
 project migration for it, and its tables are not part of the schema above. The
 `process-note` job rebuilds a note's edges (see the link pipeline in
-docs/ARCHITECTURE.md).
+docs/ARCHITECTURE.md) and the `github-sync` job runs an import or re-sync (see
+docs/API.md "GitHub").
 
 ## Migrations
 

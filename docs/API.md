@@ -2,7 +2,7 @@
 
 Auth via httpOnly cookie. JSON in, JSON out. Errors: `{ "error": { "code": string, "message": string } }`.
 
-Every path below is relative to the `/api/v1` prefix (`API_PREFIX` in packages/shared). Implemented today: `GET /health`, the auth routes, `GET /me`, notes CRUD and backlinks, the tags routes, `GET /search`, and the graph routes (`GET /graph`, `GET /graph/:noteId/neighbors`). The rest is the Phase 1+ contract.
+Every path below is relative to the `/api/v1` prefix (`API_PREFIX` in packages/shared). Implemented today: `GET /health`, the auth routes, `GET /me`, notes CRUD and backlinks, the tags routes, `GET /search`, the graph routes (`GET /graph`, `GET /graph/:noteId/neighbors`), and the GitHub sync routes (`GET /github/gists`, `GET /github/repos`, `POST /github/import`, `GET /github/jobs/:id`, `POST /github/webhook`). The rest is the Phase 1+ contract.
 
 Request/response bodies are described by the zod schemas in packages/shared (`noteSchema`, `tagSchema`, `graphResponseSchema`, and their input/output wrappers); controllers parse against them, so a drift fails loudly rather than silently.
 
@@ -16,8 +16,8 @@ Request/response bodies are described by the zod schemas in packages/shared (`no
 | `NOT_FOUND` | 404 | no route or resource |
 | `BAD_REQUEST` | 400 | malformed body or params (e.g. an undecodable cursor) |
 | `VALIDATION_ERROR` | 400 | request failed a shared zod schema |
-| `UNAUTHORIZED` | 401 | missing/invalid session, or GitHub rejected the login |
-| `FORBIDDEN` | 403 | OAuth state mismatch |
+| `UNAUTHORIZED` | 401 | missing/invalid session, an invalid webhook signature, or GitHub rejected a request (login or revoked token) |
+| `FORBIDDEN` | 403 | OAuth state mismatch, or GitHub denied an API request (rate limit or missing scope) |
 | `INTERNAL_ERROR` | 500 | unhandled failure (details logged, never returned) |
 
 ## Auth
@@ -125,11 +125,60 @@ target are both in `nodes`, so the result is always a self-contained subgraph.
                                  the caller's.
 
 ## GitHub
-- GET  /github/gists             list user gists
-- GET  /github/repos             list user repos
-- POST /github/import            body: { kind, ref }. Returns job id
-- GET  /github/jobs/:id
-- POST /github/webhook           repo push events (signature verified)
+
+Sync is one-way (GitHub -> notes) in this phase. The user's OAuth token is
+decrypted from `github_connections` and used with Octokit; it never leaves the
+API. Reading private repositories needs the `repo` scope and listing secret
+gists needs `gist`, so the OAuth request asks for `read:user`, `user:email`,
+`repo` and `gist`. A connection stored before those scopes were added works for
+public repos only until the user logs in again.
+
+Every route except the webhook requires a session. Gists/repos are read live
+from GitHub; an import runs in the background and is polled by id. Responses are
+validated by the schemas in `packages/shared` (`githubGistListResponseSchema`,
+`githubRepoListResponseSchema`, `githubImportResponseSchema`,
+`syncJobResponseSchema`, `githubWebhookResponseSchema`).
+
+- GET  /github/gists          200 `{ gists: GitHubGist[] }`, newest first, capped
+                             at 200. A gist is `{ id, description, files, updatedAt,
+                             htmlUrl }` where `files` are the file names inside it.
+- GET  /github/repos          200 `{ repos: GitHubRepo[] }`, most recently updated
+                             first, capped at 200. A repo is `{ id, fullName,
+                             description, private, defaultBranch, updatedAt }`.
+- POST /github/import         body: `{ kind, ref }` where `kind` is `gist` (then
+                             `ref` is a gist id) or `repo` (then `ref` is an
+                             `owner/repo` full name). 202 `{ job }` — the accepted
+                             `SyncJob`. The import is enqueued as a pg-boss job.
+                             Fails 400 before creating anything when GitHub is not
+                             connected; a 404 from GitHub (unknown gist/repo, or a
+                             private repo the token cannot see) is passed through.
+- GET  /github/jobs/:id       200 `{ job }`. A `SyncJob` is `{ id, kind, status,
+                             stats, error, createdAt, finishedAt }`; `kind` is
+                             `gist_import | repo_import | repo_sync`, `status` is
+                             `queued | running | done | failed`, and `stats` is
+                             `{ total, processed, imported, updated, skipped,
+                             failed }`. 404 if the job is missing or not the
+                             caller's, 400 for a non-uuid id.
+- POST /github/webhook        202 `{ queued }` for a GitHub delivery.
+                             Takes no session: GitHub authenticates with the
+                             `X-Hub-Signature-256` HMAC over the raw body, checked
+                             against `GITHUB_WEBHOOK_SECRET`. A bad or missing
+                             signature is 401 UNAUTHORIZED. Only `push` events do
+                             work: each user who imported the repository on the
+                             pushed branch gets a `repo_sync` job, and `queued` is
+                             how many. Other events (or a branch nobody imported)
+                             return 202 `{ queued: 0 }` so GitHub stops retrying.
+
+Imported markdown becomes a `doc` note. `source` is `gist` or `repo`,
+`source_ref` keys the file (`<gist id>/<file>` or `<owner>/<repo>/<path>`), and
+`source_sha` is the file's content hash for gists (GitHub exposes no per-file
+blob sha) or the blob sha for repositories. Re-importing a file whose
+`source_sha` is unchanged is a no-op, which is also what leaves local edits
+alone between upstream changes; when it differs, the upstream copy wins (v1 is
+one-way). Files over 1 MB and non-markdown files are skipped.
+
+Import is additive only: a markdown file deleted upstream leaves its note in
+place (no tombstone) in this phase.
 
 ## Realtime
 - GET /events                    SSE stream: note.updated, graph.updated, sync.progress
