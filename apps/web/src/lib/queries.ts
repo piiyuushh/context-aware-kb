@@ -14,6 +14,7 @@ import {
   deleteNote,
   detachTag,
   getBacklinks,
+  getGraph,
   getMe,
   getNote,
   isClientError,
@@ -22,6 +23,7 @@ import {
   logout,
   searchNotes,
   updateNote,
+  type GraphFilters,
   type NoteFilters,
   type SearchFilters,
   type UpdateNoteVariables,
@@ -67,6 +69,15 @@ function updateNoteTagsInLists(
       return { ...item, tags: update(item.tags) }
     })
     return found ? { ...previous, notes } : previous
+  })
+}
+
+/** Drops a deleted note from every cached list so the sidebar updates at once. */
+function removeNoteFromLists(queryClient: QueryClient, noteId: string): void {
+  queryClient.setQueriesData<NoteListResponse>({ queryKey: queryKeys.notesRoot }, (previous) => {
+    if (!previous) return previous
+    const notes = previous.notes.filter((item) => item.id !== noteId)
+    return notes.length === previous.notes.length ? previous : { ...previous, notes }
   })
 }
 
@@ -119,6 +130,20 @@ export function useTags() {
   })
 }
 
+/**
+ * The filtered knowledge graph. Keeps the previous graph on screen while new
+ * filters load, so switching a filter re-heats the existing layout instead of
+ * flashing an empty canvas.
+ */
+export function useGraph(filters: GraphFilters) {
+  return useQuery({
+    queryKey: queryKeys.graph(filters),
+    queryFn: ({ signal }) => getGraph(filters, { signal }),
+    retry: shouldRetry,
+    placeholderData: keepPreviousData,
+  })
+}
+
 export function useBacklinks(id: string, enabled = true) {
   return useQuery({
     queryKey: queryKeys.noteBacklinks(id),
@@ -159,8 +184,13 @@ export function useDeleteNote() {
   return useMutation({
     mutationFn: (id: string) => deleteNote(id),
     onSuccess: (_data, id) => {
+      // Remove the note from every cached view up front, then revalidate the
+      // list and graph so cursor pages and edges reconcile with the server.
+      removeNoteFromLists(queryClient, id)
       queryClient.removeQueries({ queryKey: queryKeys.noteDetail(id) })
+      queryClient.removeQueries({ queryKey: queryKeys.noteBacklinks(id) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.notesRoot })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.graphRoot })
     },
   })
 }

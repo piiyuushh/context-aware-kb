@@ -1,4 +1,4 @@
-import type { NoteFilters, SearchFilters } from './api-client'
+import type { GraphFilters, NoteFilters, SearchFilters } from './api-client'
 
 /**
  * Query key factory. `notesRoot` is a prefix of every list key, so
@@ -12,4 +12,6 @@ export const queryKeys = {
   noteBacklinks: (id: string) => ['note', id, 'backlinks'] as const,
   tags: ['tags'] as const,
   search: (filters: SearchFilters) => ['search', filters] as const,
+  graphRoot: ['graph'] as const,
+  graph: (filters: GraphFilters) => ['graph', filters] as const,
 }

@@ -56,6 +56,11 @@ Index: GIN on search. Index on (user_id, updated_at).
 
 Index on source_note_id and target_note_id.
 
+Rows are only ever written by the `process-note` job (never by a client):
+`explicit` edges come from `[[wiki links]]`, `suggested` edges from shared-tag
+and text similarity and carry a `score` in `[0, 1]`. Backlinks read `explicit`
+only; the graph API reads both.
+
 ### sync_jobs
 - id uuid pk
 - user_id uuid fk
@@ -94,7 +99,17 @@ string is parsed as words, never as tsquery syntax.
 
 ## Graph queries
 
-Neighbors within N hops via recursive CTE on note_links. Filter by type, tag, score threshold.
+Neighbors within N hops via recursive CTE on note_links, followed in both
+directions. Filter by type, tag, score threshold.
+
+## Job queue
+
+[pg-boss](https://github.com/timgit/pg-boss) runs the background jobs on the
+same Postgres. It owns a `pgboss` schema that it creates and migrates itself on
+startup, so the queue is **not** managed by node-pg-migrate — there is no
+project migration for it, and its tables are not part of the schema above. The
+`process-note` job rebuilds a note's edges (see the link pipeline in
+docs/ARCHITECTURE.md).
 
 ## Migrations
 

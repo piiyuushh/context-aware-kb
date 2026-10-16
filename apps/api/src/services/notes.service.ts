@@ -1,5 +1,6 @@
 import { HttpError } from '../errors'
 import { decodeCursor, encodeCursor } from '../lib/cursor'
+import { enqueueProcessNote } from '../jobs/queue'
 import {
   deleteNote as deleteNoteRecord,
   findBacklinks,
@@ -18,13 +19,18 @@ function noteNotFound(): HttpError {
 }
 
 export async function createNote(userId: string, input: CreateNoteInput): Promise<Note> {
-  return insertNote({
+  const note = await insertNote({
     userId,
     type: input.type,
     title: input.title,
     contentMd: input.contentMd,
     language: input.language ?? null,
   })
+
+  // Derived data: extracted links/tags and suggested edges are rebuilt async.
+  await enqueueProcessNote({ userId, noteId: note.id })
+
+  return note
 }
 
 /** Loads an owned note or throws `NOT_FOUND` (also covers other users' notes). */
@@ -82,6 +88,9 @@ export async function updateNote(
     throw noteNotFound()
   }
 
+  // Body/title changed, so the extracted links and suggestions must be rebuilt.
+  await enqueueProcessNote({ userId, noteId: note.id })
+
   return note
 }
 
@@ -93,7 +102,10 @@ export async function deleteNote(userId: string, id: string): Promise<void> {
   }
 }
 
-/** Incoming links to a note. The note must exist and be owned by the caller. */
+/**
+ * Incoming explicit links to a note (see `findBacklinks`). The note must exist
+ * and be owned by the caller.
+ */
 export async function getBacklinks(userId: string, id: string): Promise<Note[]> {
   await getNote(userId, id)
 

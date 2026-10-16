@@ -4,6 +4,7 @@ import {
   backlinksResponseSchema,
   createNoteInputSchema,
   errorResponseSchema,
+  graphResponseSchema,
   meResponseSchema,
   noteListResponseSchema,
   noteResponseSchema,
@@ -13,6 +14,8 @@ import {
   updateNoteInputSchema,
   type AttachTagInput,
   type CreateNoteInput,
+  type GraphQuery,
+  type GraphResponse,
   type ListNotesQuery,
   type Note,
   type NoteListResponse,
@@ -49,6 +52,13 @@ export type NoteFilters = Partial<ListNotesQuery>
 
 /** Filters accepted by `GET /search`. `q` is what ranks the hits, so it leads. */
 export type SearchFilters = Partial<SearchQuery>
+
+/**
+ * Filters accepted by `GET /graph`. `limit` caps the node count; `minScore`
+ * drops low-confidence suggested edges. All fields are optional here — the API
+ * applies its own defaults.
+ */
+export type GraphFilters = Partial<GraphQuery>
 
 export type UpdateNoteVariables = {
   id: string
@@ -258,4 +268,23 @@ export async function searchNotes(
     },
   })
   return results
+}
+
+/**
+ * `GET /graph` — the nodes matching the filters plus the edges between them.
+ * The response is the wire shape (`{ nodes, edges }`); the canvas converts it.
+ */
+export async function getGraph(
+  filters: GraphFilters = {},
+  options?: ApiRequestOptions,
+): Promise<GraphResponse> {
+  return requestJson('/graph', graphResponseSchema, {
+    ...options,
+    query: {
+      tag: filters.tag,
+      type: filters.type,
+      minScore: filters.minScore,
+      limit: filters.limit,
+    },
+  })
 }

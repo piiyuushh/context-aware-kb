@@ -47,6 +47,40 @@ export async function upsertTag(userId: string, name: string): Promise<Tag> {
   return mapTag(row)
 }
 
+/**
+ * Creates any missing tags and attaches them all to a note in two statements
+ * (no per-tag round trip). Idempotent: both inserts ignore conflicts, so a
+ * second run is a no-op. Existing tags that are no longer present are left in
+ * place — the pipeline never removes a tag it did not create.
+ */
+export async function attachTagsByNames(
+  userId: string,
+  noteId: string,
+  names: string[],
+): Promise<void> {
+  if (names.length === 0) {
+    return
+  }
+
+  const pool = getPool()
+
+  await pool.query(
+    `insert into tags (user_id, name)
+     select $1, unnest($2::text[])
+     on conflict (user_id, name) do nothing`,
+    [userId, names],
+  )
+
+  await pool.query(
+    `insert into note_tags (note_id, tag_id)
+     select $1, t.id
+     from tags t
+     where t.user_id = $2 and t.name = any($3::text[])
+     on conflict do nothing`,
+    [noteId, userId, names],
+  )
+}
+
 /** Links a tag to a note. Re-linking is a no-op (composite primary key). */
 export async function attachTagToNote(noteId: string, tagId: string): Promise<void> {
   await getPool().query(

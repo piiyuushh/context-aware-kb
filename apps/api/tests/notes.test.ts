@@ -10,6 +10,7 @@ import {
 import { createApp } from '../src/app'
 import { SESSION_COOKIE_NAME, SESSION_TTL_SECONDS } from '../src/lib/cookies'
 import { createSessionToken } from '../src/lib/session'
+import { enqueueProcessNote } from '../src/jobs/queue'
 import {
   deleteNote,
   findBacklinks,
@@ -27,6 +28,10 @@ vi.mock('../src/repositories/notes.repository', () => ({
   deleteNote: vi.fn(),
   listNotes: vi.fn(),
   findBacklinks: vi.fn(),
+}))
+
+vi.mock('../src/jobs/queue', () => ({
+  enqueueProcessNote: vi.fn(),
 }))
 
 const NOTES_URL = `${API_PREFIX}/notes`
@@ -139,6 +144,7 @@ describe(`GET ${NOTES_URL}`, () => {
 describe(`POST ${NOTES_URL}`, () => {
   beforeEach(() => {
     vi.mocked(insertNote).mockReset()
+    vi.mocked(enqueueProcessNote).mockReset()
   })
 
   it('responds 401 UNAUTHORIZED without a session cookie', async () => {
@@ -166,6 +172,17 @@ describe(`POST ${NOTES_URL}`, () => {
       contentMd: 'Body',
       language: null,
     })
+  })
+
+  it('enqueues the link pipeline for the new note', async () => {
+    vi.mocked(insertNote).mockResolvedValue(makeNote({ id: NOTE_ID }))
+
+    await request(createApp())
+      .post(NOTES_URL)
+      .set('Cookie', sessionCookie(USER_ID))
+      .send({ type: 'note', title: 'Hello' })
+
+    expect(enqueueProcessNote).toHaveBeenCalledWith({ userId: USER_ID, noteId: NOTE_ID })
   })
 
   it('defaults contentMd to an empty string when omitted', async () => {
@@ -248,6 +265,7 @@ describe(`GET ${NOTE_URL}`, () => {
 describe(`PATCH ${NOTE_URL}`, () => {
   beforeEach(() => {
     vi.mocked(updateNote).mockReset()
+    vi.mocked(enqueueProcessNote).mockReset()
   })
 
   it('responds 401 UNAUTHORIZED without a session cookie', async () => {
@@ -267,6 +285,17 @@ describe(`PATCH ${NOTE_URL}`, () => {
     expect(response.status).toBe(200)
     expect(noteResponseSchema.parse(response.body).note.title).toBe('Renamed')
     expect(vi.mocked(updateNote).mock.calls[0]?.slice(0, 2)).toEqual([USER_ID, NOTE_ID])
+  })
+
+  it('enqueues the link pipeline after an update', async () => {
+    vi.mocked(updateNote).mockResolvedValue(makeNote({ id: NOTE_ID }))
+
+    await request(createApp())
+      .patch(NOTE_URL)
+      .set('Cookie', sessionCookie(USER_ID))
+      .send({ contentMd: 'New [[Link]]' })
+
+    expect(enqueueProcessNote).toHaveBeenCalledWith({ userId: USER_ID, noteId: NOTE_ID })
   })
 
   it('forwards an explicit null language to the repository', async () => {

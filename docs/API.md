@@ -2,9 +2,9 @@
 
 Auth via httpOnly cookie. JSON in, JSON out. Errors: `{ "error": { "code": string, "message": string } }`.
 
-Every path below is relative to the `/api/v1` prefix (`API_PREFIX` in packages/shared). Implemented today: `GET /health`, the auth routes, `GET /me`, notes CRUD and backlinks, the tags routes, and `GET /search`. The rest is the Phase 1+ contract.
+Every path below is relative to the `/api/v1` prefix (`API_PREFIX` in packages/shared). Implemented today: `GET /health`, the auth routes, `GET /me`, notes CRUD and backlinks, the tags routes, `GET /search`, and the graph routes (`GET /graph`, `GET /graph/:noteId/neighbors`). The rest is the Phase 1+ contract.
 
-Request/response bodies are described by the zod schemas in packages/shared (`noteSchema`, `tagSchema`, and their input/output wrappers); controllers parse against them, so a drift fails loudly rather than silently.
+Request/response bodies are described by the zod schemas in packages/shared (`noteSchema`, `tagSchema`, `graphResponseSchema`, and their input/output wrappers); controllers parse against them, so a drift fails loudly rather than silently.
 
 ## Health
 - GET /health                   liveness. 200 `{ status: "ok", service: "api", version, uptime, timestamp }`, validated by `healthResponseSchema` in packages/shared. Takes no auth.
@@ -66,7 +66,9 @@ where `type` is `doc | snippet | note`, `source` is `local | gist | repo`, and
                              at least one. 200 `{ note }`.
 - DELETE /notes/:id          204, no body.
 - GET    /notes/:id/backlinks 200 `{ backlinks: Note[] }` — notes that link to
-                             this one (incoming graph edges), newest first.
+                             this one through an explicit `[[wiki link]]` edge,
+                             newest first. Computed (`suggested`) edges are
+                             excluded: a backlink is a link the author wrote.
 
 ## Tags
 
@@ -98,8 +100,29 @@ filter on `/notes`, here it is required: the endpoint exists to rank a term.
                              VALIDATION_ERROR.
 
 ## Graph
-- GET /graph                     query: tag, type, minScore, limit. Returns { nodes, edges }
-- GET /graph/:noteId/neighbors   query: depth (1-3)
+
+Auth required. Edges live in `note_links` and are rebuilt in the background
+when a note is saved (see the link pipeline in docs/ARCHITECTURE.md). A `GraphNode`
+is `{ id, type, title, tags }`; a `GraphEdge` is
+`{ id, source, target, type, score }` where `type` is `explicit` (from a wiki
+link, `score` null) or `suggested` (computed, `score` in `[0, 1]`). Responses
+are validated by `graphResponseSchema` in packages/shared.
+
+Both routes return `{ nodes, edges }` and only include edges whose source and
+target are both in `nodes`, so the result is always a self-contained subgraph.
+
+- GET /graph                     query: tag, type, minScore, limit. 200
+                                 `{ nodes, edges }`. `nodes` is the caller's
+                                 notes, newest first, capped at `limit`
+                                 (default 200, max 2000). `tag` matches one
+                                 exact tag name, `type` filters by kind.
+                                 `minScore` (0-1) drops `suggested` edges below
+                                 the threshold; `explicit` edges are always kept.
+- GET /graph/:noteId/neighbors   query: depth (1-3, default 1). 200
+                                 `{ nodes, edges }` for the subgraph within
+                                 `depth` hops of the note, followed in both
+                                 directions. 404 if the note is missing or not
+                                 the caller's.
 
 ## GitHub
 - GET  /github/gists             list user gists

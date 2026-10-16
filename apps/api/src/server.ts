@@ -1,4 +1,7 @@
+// Must come first: loads the repo-root .env before any module reads getConfig().
+import './env'
 import { createApp } from './app'
+import { startJobs, stopJobs } from './jobs/boss'
 import { DEFAULT_PORT, SERVICE_NAME, SERVICE_VERSION, SHUTDOWN_TIMEOUT_MS } from './constants'
 
 /** `PORT` when it is a usable TCP port, otherwise the default. */
@@ -18,7 +21,13 @@ const server = createApp().listen(port, () => {
   console.log(`${logPrefix} v${SERVICE_VERSION} listening on ${url} (${nodeEnv})`)
 })
 
-function shutdown(signal: NodeJS.Signals): void {
+// Workers boot alongside HTTP. A failure here is logged, not fatal: the API can
+// still serve reads/writes while the queue recovers.
+startJobs().catch((error) => {
+  console.error(`${logPrefix} failed to start job workers`, error)
+})
+
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`${logPrefix} ${signal} received, closing server`)
 
   // Do not hang forever on keep-alive connections.
@@ -27,6 +36,10 @@ function shutdown(signal: NodeJS.Signals): void {
     process.exit(1)
   }, SHUTDOWN_TIMEOUT_MS)
   forceExit.unref()
+
+  await stopJobs().catch((error) => {
+    console.error(`${logPrefix} failed to stop job workers`, error)
+  })
 
   server.close((error) => {
     if (error) {
@@ -39,5 +52,9 @@ function shutdown(signal: NodeJS.Signals): void {
   })
 }
 
-process.on('SIGINT', shutdown)
-process.on('SIGTERM', shutdown)
+function handleSignal(signal: NodeJS.Signals): void {
+  void shutdown(signal)
+}
+
+process.on('SIGINT', handleSignal)
+process.on('SIGTERM', handleSignal)
