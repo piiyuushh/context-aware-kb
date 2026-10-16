@@ -1,4 +1,5 @@
 export * from './error'
+export * from './github'
 export * from './graph'
 export * from './health'
 export * from './note'
