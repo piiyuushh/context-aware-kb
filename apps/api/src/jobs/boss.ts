@@ -1,6 +1,7 @@
 import PgBoss from 'pg-boss'
 import { getConfig } from '../config'
-import { PROCESS_NOTE_QUEUE } from './constants'
+import { GITHUB_SYNC_QUEUE, PROCESS_NOTE_QUEUE } from './constants'
+import { githubSyncWorker } from './github-sync'
 import { processNoteWorker } from './process-note'
 
 /**
@@ -32,7 +33,9 @@ export async function startJobs(): Promise<void> {
 
   await instance.start()
   await instance.createQueue(PROCESS_NOTE_QUEUE)
+  await instance.createQueue(GITHUB_SYNC_QUEUE)
   await instance.work(PROCESS_NOTE_QUEUE, processNoteWorker)
+  await instance.work(GITHUB_SYNC_QUEUE, githubSyncWorker)
 }
 
 /** Stops pg-boss and clears the singleton. Safe when it was never started. */

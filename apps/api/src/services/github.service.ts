@@ -7,8 +7,13 @@ const ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token'
 const API_BASE_URL = 'https://api.github.com'
 const USER_AGENT = 'context-aware-kb'
 
-/** Minimal scopes needed to read the profile and a verified email. */
-export const GITHUB_OAUTH_SCOPES = ['read:user', 'user:email'] as const
+/**
+ * Scopes needed to read the profile, a verified email, the user's gists, and
+ * repository contents (including private repos). `repo` is the only scope that
+ * grants read access to private repositories; `gist` covers listing secret
+ * gists and is a prerequisite for a future two-way sync.
+ */
+export const GITHUB_OAUTH_SCOPES = ['read:user', 'user:email', 'repo', 'gist'] as const
 
 export interface GitHubToken {
   accessToken: string

@@ -178,6 +178,87 @@ export async function deleteNote(userId: string, id: string): Promise<boolean> {
   return (rowCount ?? 0) > 0
 }
 
+/** What a sync did to one note, counted into the job's `stats`. */
+export type SyncedNoteAction = 'imported' | 'updated' | 'skipped'
+
+export interface UpsertSyncedNoteInput {
+  userId: string
+  title: string
+  contentMd: string
+  language: string | null
+  source: 'gist' | 'repo'
+  sourceRef: string
+  sourceSha: string
+}
+
+export interface SyncedNoteResult {
+  noteId: string
+  action: SyncedNoteAction
+}
+
+/**
+ * Upserts a GitHub-sourced note keyed by `(user_id, source, source_ref)`.
+ *
+ * The `source_sha` is the sync's change detector: when it is unchanged the
+ * note is left completely alone (a `skipped`), which is also what preserves a
+ * user's local edits between upstream changes. When it differs the upstream
+ * copy wins — v1 sync is one-way. Imported markdown is always a `doc`.
+ */
+export async function upsertSyncedNote(input: UpsertSyncedNoteInput): Promise<SyncedNoteResult> {
+  const pool = getPool()
+
+  const { rows: existing } = await pool.query<{ id: string; source_sha: string | null }>(
+    `select id, source_sha from notes where user_id = $1 and source = $2 and source_ref = $3`,
+    [input.userId, input.source, input.sourceRef],
+  )
+
+  const current = existing[0]
+
+  if (!current) {
+    const { rows } = await pool.query<{ id: string }>(
+      `insert into notes (user_id, type, title, content_md, language, source, source_ref, source_sha)
+       values ($1, 'doc', $2, $3, $4, $5, $6, $7)
+       on conflict (user_id, source, source_ref) do update
+         set title = excluded.title,
+             content_md = excluded.content_md,
+             language = excluded.language,
+             source_sha = excluded.source_sha,
+             updated_at = now()
+       returning id`,
+      [
+        input.userId,
+        input.title,
+        input.contentMd,
+        input.language,
+        input.source,
+        input.sourceRef,
+        input.sourceSha,
+      ],
+    )
+
+    const inserted = rows[0]
+    if (!inserted) {
+      throw new Error('upsertSyncedNote did not return a row')
+    }
+
+    return { noteId: inserted.id, action: 'imported' }
+  }
+
+  if (current.source_sha === input.sourceSha) {
+    return { noteId: current.id, action: 'skipped' }
+  }
+
+  // The sha guard makes this a no-op if a concurrent write already caught up.
+  const { rowCount } = await pool.query(
+    `update notes
+     set title = $3, content_md = $4, language = $5, source_sha = $6, updated_at = now()
+     where id = $1 and user_id = $2 and source_sha is distinct from $6`,
+    [current.id, input.userId, input.title, input.contentMd, input.language, input.sourceSha],
+  )
+
+  return { noteId: current.id, action: (rowCount ?? 0) > 0 ? 'updated' : 'skipped' }
+}
+
 export interface ListNotesFilter {
   q?: string
   type?: NoteType

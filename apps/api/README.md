@@ -2,9 +2,9 @@
 
 Express 5 + TypeScript (ESM) API for the knowledge base. Ships the database
 schema and migrations, GitHub OAuth login with an httpOnly cookie session, the
-notes/tags/search/graph REST routes, and pg-boss background processing that
-rebuilds a note's links and suggestions on save. GitHub sync arrives in a later
-phase (see docs/ROADMAP.md).
+notes/tags/search/graph REST routes, GitHub gist and repo sync with signed
+webhooks, and pg-boss background processing that rebuilds a note's links and
+suggestions on save.
 
 ## Scripts
 
@@ -39,6 +39,7 @@ Prettier runs from the repo root: `npx prettier --write apps/api`.
 | `GITHUB_CLIENT_SECRET`        | —                       | OAuth app                       |
 | `GITHUB_OAUTH_CALLBACK_URL`   | —                       | OAuth redirect URI              |
 | `GITHUB_TOKEN_ENCRYPTION_KEY` | —                       | 32-byte hex key for AES-256-GCM |
+| `GITHUB_WEBHOOK_SECRET`       | —                       | Verifies webhook signatures     |
 | `WEB_APP_URL`                 | `http://localhost:3000` | Post-login redirect target      |
 
 Keep `.env.example` at the repo root current when adding variables. `server.ts`
@@ -58,14 +59,15 @@ src/
   constants.ts     SERVICE_NAME, SERVICE_VERSION, defaults
   errors.ts        HttpError + error envelope helper
   db/pool.ts       lazily-created pg Pool
-  lib/             crypto (AES-256-GCM), session tokens, cookie options, cursor
+  lib/             crypto (AES-256-GCM), session tokens, cookie options, cursor, webhook HMAC
   markdown/        remark parse + extraction (wiki links, tags, headings, keywords)
   links/           pure suggested-edge scoring (tags + text similarity)
-  jobs/            pg-boss bootstrap, queue helpers, process-note worker
+  github/          Octokit client + pure import helpers (markdown filter, titles, source keys)
+  jobs/            pg-boss bootstrap, queue helpers, process-note + github-sync workers
   routes/          HTTP wiring only
   controllers/     parse/validate input, call services, send response
-  services/        business logic (auth, github, users, notes, tags, search, links, graph, health)
-  repositories/    SQL (users, github_connections, notes, tags, links, graph)
+  services/        business logic (auth, github, github-sync, users, notes, tags, search, links, graph, health)
+  repositories/    SQL (users, github_connections, github_repo_imports, notes, tags, links, graph, sync_jobs)
   middleware/      requireAuth, notFoundHandler, errorHandler
 migrations/        node-pg-migrate TypeScript migrations
 tests/             Vitest + Supertest tests against createApp()
@@ -78,14 +80,25 @@ repositories may talk to Postgres.
 
 `markdown/` turns a note body into wiki links, tags and headings, and
 `jobs/process-note.ts` runs on save to upsert explicit edges and compute
-suggested edges. `jobs/boss.ts` owns the pg-boss instance on the same
-`DATABASE_URL` (its `pgboss` schema is created on startup, so there is no
-project migration for the queue). `enqueueProcessNote` is best-effort: derived
-data must not fail the note write, so enqueue errors are logged and the next
-save retries.
+suggested edges. `jobs/github-sync.ts` runs a gist or repo import (or a webhook
+re-sync), checkpointing `sync_jobs.stats` as it goes. `jobs/boss.ts` owns the
+pg-boss instance on the same `DATABASE_URL` (its `pgboss` schema is created on
+startup, so there is no project migration for the queue). `enqueueProcessNote`
+is best-effort: derived data must not fail the note write, so enqueue errors are
+logged and the next save retries. `enqueueGithubSync` is the primary work of the
+request, so its enqueue failure is surfaced and the job is marked failed.
 
 `npm run dev` starts the workers with the API. Tests never start pg-boss;
 they mock the queue and repositories.
+
+## GitHub sync
+
+`github/client.ts` wraps Octokit per user token; `services/github-sync.service.ts`
+decides what to import and stores notes keyed by `(source, source_ref)` with the
+file's `source_sha` as the change detector (see docs/API.md "GitHub").
+`POST /github/webhook` is verified against `GITHUB_WEBHOOK_SECRET` over the raw
+request body, which `app.ts` hands it via a path-scoped raw parser, and turns a
+`push` into one `repo_sync` job per importer of that repo/branch.
 
 ## Database
 
@@ -101,7 +114,9 @@ the code, upserts the user, stores the access token encrypted with AES-256-GCM
 (`lib/crypto.ts`), and sets the `kb_session` cookie. `/me` reads that cookie.
 
 GitHub access tokens are never stored or logged in plaintext; the key comes from
-`GITHUB_TOKEN_ENCRYPTION_KEY`.
+`GITHUB_TOKEN_ENCRYPTION_KEY`. The OAuth request asks for `read:user`,
+`user:email`, `repo` and `gist`: `repo` is needed to read private repositories
+during import and `gist` to list secret gists.
 
 ## Contract
 

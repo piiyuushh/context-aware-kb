@@ -5,6 +5,11 @@ export interface GithubConfig {
   clientId: string
   clientSecret: string
   callbackUrl: string
+  /**
+   * Secret configured on the GitHub webhook. Optional so the app boots without
+   * webhooks; the webhook endpoint answers 500 until it is set. Never logged.
+   */
+  webhookSecret: string
 }
 
 export interface AppConfig {
@@ -46,6 +51,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       clientId: required('GITHUB_CLIENT_ID', env.GITHUB_CLIENT_ID),
       clientSecret: required('GITHUB_CLIENT_SECRET', env.GITHUB_CLIENT_SECRET),
       callbackUrl: required('GITHUB_OAUTH_CALLBACK_URL', env.GITHUB_OAUTH_CALLBACK_URL),
+      webhookSecret: env.GITHUB_WEBHOOK_SECRET ?? '',
     },
     tokenEncryptionKey: parseEncryptionKey(
       required('GITHUB_TOKEN_ENCRYPTION_KEY', env.GITHUB_TOKEN_ENCRYPTION_KEY),

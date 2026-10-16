@@ -30,10 +30,10 @@ Update status as work completes.
 - [x] Suggested links by tags and text similarity
 
 ## Phase 4: GitHub sync
-- [ ] Gist import
-- [ ] Repo markdown import
-- [ ] Background jobs with progress
-- [ ] Webhook re-sync
+- [x] Gist import
+- [x] Repo markdown import
+- [x] Background jobs with progress
+- [x] Webhook re-sync
 
 ## Phase 5: Realtime and polish
 - [ ] SSE events

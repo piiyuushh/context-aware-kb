@@ -5,3 +5,6 @@
 
 /** Per-note link pipeline: parse markdown, upsert edges, suggest edges. */
 export const PROCESS_NOTE_QUEUE = 'process-note'
+
+/** GitHub import/re-sync: pull gists or repo markdown in as notes. */
+export const GITHUB_SYNC_QUEUE = 'github-sync'
