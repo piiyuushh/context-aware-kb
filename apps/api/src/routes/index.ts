@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { authRouter } from './auth.routes'
+import { graphRouter } from './graph.routes'
 import { healthRouter } from './health.routes'
 import { meRouter } from './me.routes'
 import { notesRouter } from './notes.routes'
@@ -19,6 +20,7 @@ export function createV1Router(): Router {
   router.use('/notes', notesRouter)
   router.use('/tags', tagsRouter)
   router.use('/search', searchRouter)
+  router.use('/graph', graphRouter)
 
   return router
 }

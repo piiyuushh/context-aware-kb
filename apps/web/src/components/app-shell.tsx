@@ -1,6 +1,7 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState, type ReactNode } from 'react'
 
 import { useAuth } from '@/components/auth-guard'
@@ -12,6 +13,7 @@ import { useCreateNote, useLogout } from '@/lib/queries'
 /** Fixed sidebar plus scrollable main pane, collapsed behind a toggle on narrow screens. */
 export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter()
+  const pathname = usePathname()
   const { user } = useAuth()
   const createNote = useCreateNote()
   const logout = useLogout()
@@ -118,6 +120,14 @@ export function AppShell({ children }: { children: ReactNode }) {
               {createError}
             </p>
           )}
+          <Link
+            href="/graph"
+            onClick={closeSidebar}
+            aria-current={pathname === '/graph' ? 'page' : undefined}
+            className="border-line bg-surface-raised text-ink-muted hover:border-line-strong hover:text-ink focus-visible:ring-accent flex w-full items-center gap-2 rounded-md border px-3 py-2 text-sm focus-visible:ring-2"
+          >
+            Knowledge graph
+          </Link>
         </div>
 
         <NotesSidebar onNavigate={closeSidebar} />

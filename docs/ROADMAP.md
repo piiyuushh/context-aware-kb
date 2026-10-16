@@ -23,11 +23,11 @@ Update status as work completes.
 - [x] Command palette (Cmd+K)
 
 ## Phase 3: Graph
-- [ ] Markdown link extraction
-- [ ] note_links table and processing job
-- [ ] Graph API
-- [ ] Graph UI with filters
-- [ ] Suggested links by tags and text similarity
+- [x] Markdown link extraction
+- [x] note_links table and processing job
+- [x] Graph API
+- [x] Graph UI with filters
+- [x] Suggested links by tags and text similarity
 
 ## Phase 4: GitHub sync
 - [ ] Gist import

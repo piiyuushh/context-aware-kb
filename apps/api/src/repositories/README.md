@@ -1,8 +1,8 @@
 # Repositories
 
-SQL lives here: one module per aggregate. Phase 1 adds `users`,
-`github_connections`, `notes`, and `tags`; `links` and `jobs` follow. See
-docs/DATABASE.md.
+SQL lives here: one module per aggregate — `users`, `github_connections`,
+`notes`, `tags`, `links` (edge writes and suggestion signals) and `graph` (edge
+reads). See docs/DATABASE.md.
 
 Rules:
 

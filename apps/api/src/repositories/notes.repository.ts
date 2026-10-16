@@ -245,7 +245,11 @@ export async function listNotes(userId: string, filter: ListNotesFilter): Promis
   return rows.map(mapNote)
 }
 
-/** Notes that link to `noteId` (incoming edges), newest first. */
+/**
+ * Notes that link to `noteId` through an explicit edge (a `[[wiki link]]`),
+ * newest first. Suggested edges are excluded: a backlink is a link the author
+ * actually wrote, not a computed suggestion.
+ */
 export async function findBacklinks(userId: string, noteId: string): Promise<Note[]> {
   const { rows } = await getPool().query<NoteRow>(
     `select ${NOTE_COLUMNS}
@@ -253,7 +257,7 @@ export async function findBacklinks(userId: string, noteId: string): Promise<Not
      join notes n on n.id = l.source_note_id
      left join note_tags nt on nt.note_id = n.id
      left join tags t on t.id = nt.tag_id
-     where l.user_id = $1 and l.target_note_id = $2
+     where l.user_id = $1 and l.target_note_id = $2 and l.type = 'explicit'
      group by n.id
      order by n.updated_at desc, n.id desc`,
     [userId, noteId],

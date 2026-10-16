@@ -1,9 +1,10 @@
 # @kb/api
 
-Express 5 + TypeScript (ESM) API for the knowledge base. Phase 1 ships the
-database schema and migrations, GitHub OAuth login with an httpOnly cookie
-session, `GET /api/v1/me`, and the existing `GET /api/v1/health`. Notes CRUD,
-search, graph and GitHub sync arrive in later phases (see docs/ROADMAP.md).
+Express 5 + TypeScript (ESM) API for the knowledge base. Ships the database
+schema and migrations, GitHub OAuth login with an httpOnly cookie session, the
+notes/tags/search/graph REST routes, and pg-boss background processing that
+rebuilds a note's links and suggestions on save. GitHub sync arrives in a later
+phase (see docs/ROADMAP.md).
 
 ## Scripts
 
@@ -40,25 +41,31 @@ Prettier runs from the repo root: `npx prettier --write apps/api`.
 | `GITHUB_TOKEN_ENCRYPTION_KEY` | —                       | 32-byte hex key for AES-256-GCM |
 | `WEB_APP_URL`                 | `http://localhost:3000` | Post-login redirect target      |
 
-Keep `.env.example` at the repo root current when adding variables. Config is
-read lazily and validated on first use (`src/config.ts`); missing variables
-throw with the variable name. Nothing is logged from the config.
+Keep `.env.example` at the repo root current when adding variables. `server.ts`
+loads the repo-root `.env` first (via `src/env.ts`, so `npm run dev` works from
+any workspace), then config is read lazily and validated on first use
+(`src/config.ts`); missing variables throw with the variable name. Nothing is
+logged from the config.
 
 ## Layout
 
 ```
 src/
-  server.ts        bootstrap: env, listen, SIGINT/SIGTERM shutdown
+  env.ts           side-effect: loads the repo-root .env (imported first by server.ts)
+  server.ts        bootstrap: listen, start/stop job workers, SIGINT/SIGTERM shutdown
   app.ts           createApp(): json + cookie parsing, router mount, 404, error handler
   config.ts        env parsing/validation (getConfig, loadConfig)
   constants.ts     SERVICE_NAME, SERVICE_VERSION, defaults
   errors.ts        HttpError + error envelope helper
   db/pool.ts       lazily-created pg Pool
-  lib/             crypto (AES-256-GCM), session tokens, cookie options
+  lib/             crypto (AES-256-GCM), session tokens, cookie options, cursor
+  markdown/        remark parse + extraction (wiki links, tags, headings, keywords)
+  links/           pure suggested-edge scoring (tags + text similarity)
+  jobs/            pg-boss bootstrap, queue helpers, process-note worker
   routes/          HTTP wiring only
   controllers/     parse/validate input, call services, send response
-  services/        business logic (auth, github, users, health)
-  repositories/    SQL (users, github_connections)
+  services/        business logic (auth, github, users, notes, tags, search, links, graph, health)
+  repositories/    SQL (users, github_connections, notes, tags, links, graph)
   middleware/      requireAuth, notFoundHandler, errorHandler
 migrations/        node-pg-migrate TypeScript migrations
 tests/             Vitest + Supertest tests against createApp()
@@ -66,6 +73,19 @@ tests/             Vitest + Supertest tests against createApp()
 
 Requests flow `routes -> controllers -> services -> repositories`. Only
 repositories may talk to Postgres.
+
+## Background jobs
+
+`markdown/` turns a note body into wiki links, tags and headings, and
+`jobs/process-note.ts` runs on save to upsert explicit edges and compute
+suggested edges. `jobs/boss.ts` owns the pg-boss instance on the same
+`DATABASE_URL` (its `pgboss` schema is created on startup, so there is no
+project migration for the queue). `enqueueProcessNote` is best-effort: derived
+data must not fail the note write, so enqueue errors are logged and the next
+save retries.
+
+`npm run dev` starts the workers with the API. Tests never start pg-boss;
+they mock the queue and repositories.
 
 ## Database
 

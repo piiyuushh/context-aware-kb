@@ -3,8 +3,9 @@
 Next.js (App Router) frontend for the Context-Aware Developer Knowledge Base.
 
 It signs you in through GitHub, keeps your notes in a sidebar, edits them in a
-CodeMirror 6 markdown editor with a live, sanitized preview and autosave, and searches
-them from a `⌘K` command palette.
+CodeMirror 6 markdown editor with a live, sanitized preview and autosave, searches
+them from a `⌘K` command palette, and maps their links in an interactive
+force-directed graph.
 
 ## Requirements
 
@@ -34,6 +35,7 @@ Run from the repo root, or from `apps/web`:
 | `/login`      | public | Dark card with "Sign in with GitHub"; redirects to `/notes` when signed in. |
 | `/notes`      | auth   | Empty state: select a note or create one.                                   |
 | `/notes/[id]` | auth   | Note editor: title, tags, markdown editor, live preview, autosave.          |
+| `/graph`      | auth   | Force-directed graph of notes and links, with filters and a detail pane.    |
 
 Auth gating is **client-side** (`src/components/auth-guard.tsx`). Session state comes
 from `GET /me`, which answers 401 when there is no cookie; the guard then replaces the
@@ -87,14 +89,17 @@ src/app/login/page.tsx         "Sign in" metadata, renders the client login card
 src/app/(app)/layout.tsx       AuthGuard + AppShell for every authenticated route
 src/app/(app)/notes/page.tsx   Empty state
 src/app/(app)/notes/[id]/page.tsx
+src/app/(app)/graph/page.tsx   Graph view
 src/components/                auth-guard, app-shell, command-palette, notes-sidebar, note-list,
                                tag-list, note-editor, code-mirror-editor, markdown-preview,
-                               user-avatar
+                               user-avatar, graph-explorer, graph-canvas
 src/lib/api-client.ts          Typed fetch wrapper: URL building, credentials, zod parsing, ApiError
 src/lib/query-keys.ts          Query key factory
 src/lib/queries.ts             TanStack Query hooks and cache updates
+src/lib/graph-data.ts          Pure graph model builder plus match/colour helpers for the canvas
 src/lib/search-snippet.ts      Pure splitter: API snippet markers -> highlighted text segments
 src/lib/use-debounced-value.ts Debounce hook shared by the sidebar and the command palette
+src/lib/use-element-size.ts    ResizeObserver hook that sizes the graph canvas
 ```
 
 ## Conventions
@@ -123,3 +128,11 @@ src/lib/use-debounced-value.ts Debounce hook shared by the sidebar and the comma
   into segments that the palette renders as `<mark>` — HTML is never injected.
 - Markdown is rendered with `rehype-sanitize`; the schema is only widened to keep the
   `hljs`/`hljs-*` classes added by `rehype-highlight`, and raw HTML stays disabled.
+- `/graph` renders on canvas via `react-force-graph-2d`, loaded with `next/dynamic`
+  (`ssr: false`) so it stays out of every other route's bundle. Node fill comes from the
+  note type, explicit edges are solid with an arrow, suggested edges are dashed and fade
+  with `minScore`. Node positions live in the simulation (never React state), hover and
+  selection only re-apply the draw accessor, and labels are culled to highlighted nodes
+  below a zoom threshold — which keeps a 2000-node graph interactive. The search box
+  highlights matches (others dim); its list, the legend and the detail pane give the
+  canvas a keyboard-accessible counterpart.
