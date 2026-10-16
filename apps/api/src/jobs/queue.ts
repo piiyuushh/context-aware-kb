@@ -1,5 +1,6 @@
 import { getBoss } from './boss'
-import { PROCESS_NOTE_QUEUE } from './constants'
+import { GITHUB_SYNC_QUEUE, PROCESS_NOTE_QUEUE } from './constants'
+import type { GithubSyncJobData } from './github-sync'
 import type { ProcessNoteJobData } from './process-note'
 
 /**
@@ -21,4 +22,16 @@ export async function enqueueProcessNote(data: ProcessNoteJobData): Promise<void
   } catch (error) {
     console.error('[api] failed to enqueue process-note', error)
   }
+}
+
+/**
+ * Enqueues a GitHub import/re-sync. Unlike `enqueueProcessNote` this is the
+ * primary work of a user action, not derived data, so a queue failure throws and
+ * the caller marks the `sync_jobs` row failed instead of leaving it queued.
+ */
+export async function enqueueGithubSync(data: GithubSyncJobData): Promise<void> {
+  await getBoss().send(GITHUB_SYNC_QUEUE, data, {
+    retryLimit: 2,
+    retryBackoff: true,
+  })
 }

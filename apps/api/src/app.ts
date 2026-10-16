@@ -16,6 +16,10 @@ export function createApp(): Express {
   const app = express()
 
   app.disable('x-powered-by')
+  // The GitHub webhook signature is computed over the exact request bytes, so
+  // that one path gets a raw buffer before the JSON parser consumes the stream.
+  // body-parser skips a request already parsed by an earlier parser.
+  app.use(`${API_PREFIX}/github/webhook`, express.raw({ type: '*/*', limit: '5mb' }))
   app.use(express.json())
   app.use(cookieParser())
 
