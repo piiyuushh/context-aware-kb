@@ -12,6 +12,7 @@ process.env.GITHUB_CLIENT_ID = 'test-client-id'
 process.env.GITHUB_CLIENT_SECRET = 'test-client-secret'
 process.env.GITHUB_OAUTH_CALLBACK_URL = 'http://localhost:4000/api/v1/auth/github/callback'
 process.env.GITHUB_TOKEN_ENCRYPTION_KEY = 'a'.repeat(64)
+process.env.GITHUB_WEBHOOK_SECRET = 'test-webhook-secret'
 process.env.WEB_APP_URL = 'http://localhost:3000'
 
 resetConfigCache()
