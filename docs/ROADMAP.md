@@ -10,16 +10,17 @@ Update status as work completes.
 - [x] CI: lint, typecheck, test
 
 ## Phase 1: Core notes
-- [ ] DB schema and migrations
-- [ ] GitHub OAuth login
-- [ ] Notes CRUD API
-- [ ] Markdown editor and preview
-- [ ] Tags
+- [x] DB schema and migrations
+- [x] GitHub OAuth login
+- [x] Notes CRUD API
+- [x] Web shell: login page, notes list and tags sidebar
+- [x] Markdown editor and preview
+- [x] Tags
 
 ## Phase 2: Search
-- [ ] tsvector index
-- [ ] Search API and UI
-- [ ] Command palette (Cmd+K)
+- [x] tsvector index (generated `notes.search` column + GIN index, shipped with the notes table)
+- [x] Search API and UI (GET /search: ranked hits, highlighted snippets, type/tag filters)
+- [x] Command palette (Cmd+K)
 
 ## Phase 3: Graph
 - [ ] Markdown link extraction

@@ -12,8 +12,8 @@
 
 ### github_connections
 - id uuid pk
-- user_id uuid fk users
-- access_token_enc bytea
+- user_id uuid fk users (unique: one connection per user)
+- access_token_enc bytea (AES-256-GCM: iv || auth tag || ciphertext)
 - scopes text[]
 - updated_at timestamptz
 
@@ -42,6 +42,7 @@ Index: GIN on search. Index on (user_id, updated_at).
 - note_id uuid fk
 - tag_id uuid fk
 - pk (note_id, tag_id)
+- index on tag_id (reverse lookup by tag)
 
 ### note_links (graph edges)
 - id uuid pk
@@ -64,15 +65,52 @@ Index on source_note_id and target_note_id.
 - error text null
 - created_at, finished_at timestamptz
 
+Index on (user_id, created_at).
+
+### Constraints and defaults
+
+- Primary keys are `uuid default gen_random_uuid()` (built into Postgres 13+).
+- `type`/`source`/`kind`/`status` use `check` constraints, not enums, so adding a
+  value is a code change plus a migration, never an `ALTER TYPE`.
+- `content_md` defaults to `''`; `source` defaults to `local`; `status` defaults
+  to `queued`; `scopes`/`stats` default to empty.
+- All `user_id` foreign keys cascade on delete.
+
+## Full-text search
+
+`notes.search` is a generated `tsvector` over `title || ' ' || content_md`
+(english config) with a GIN index, added with the `notes` table. Both search
+endpoints read it, so neither needs an extra index or migration:
+
+- `GET /notes?q=` adds a `n.search @@ plainto_tsquery('english', …)` filter
+  alongside the other list filters.
+- `GET /search` reads the same column but ranks rows with `ts_rank_cd`
+  (relevance, most relevant first) and builds each hit's snippet with
+  `ts_headline`, wrapping matched terms in the `<mark>`/`</mark>` markers shared
+  from packages/shared (passed as `ts_headline` options, not interpolated).
+
+Both go through `plainto_tsquery` with the term as a bound parameter, so a search
+string is parsed as words, never as tsquery syntax.
+
 ## Graph queries
 
 Neighbors within N hops via recursive CTE on note_links. Filter by type, tag, score threshold.
 
 ## Migrations
 
-Tool: drizzle-kit or node-pg-migrate. One migration per change. Never edit applied migrations.
+Tool: [node-pg-migrate](https://github.com/salsita/node-pg-migrate). One migration
+per change. Never edit an applied migration.
 
-Migrations land in Phase 1; `npm run db:migrate` is a placeholder until the tool is wired up.
+- Migrations live in `apps/api/migrations` as TypeScript files, one per table,
+  prefixed with a sortable timestamp (`up` and `down` in each).
+- `pgmigrations` records what has run.
+- Run from the repo root; the root `.env` supplies `DATABASE_URL`.
+
+```
+npm run db:migrate         # apply all pending migrations
+npm run db:migrate:down    # roll back the last one
+npm run db:migrate:create  # scaffold migrations/<timestamp>_<name>.ts
+```
 
 ## Local development
 
@@ -80,6 +118,7 @@ Postgres 16 comes from `docker-compose.yml`:
 
 ```
 docker compose up -d
+npm run db:migrate
 ```
 
 Connection string (also in .env.example): `postgresql://kb:kb@localhost:5432/kb`.
