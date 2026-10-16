@@ -1,4 +1,5 @@
 import express from 'express'
+import cookieParser from 'cookie-parser'
 import { API_PREFIX } from '@kb/shared'
 import { errorHandler } from './middleware/error-handler'
 import { notFoundHandler } from './middleware/not-found'
@@ -16,6 +17,7 @@ export function createApp(): Express {
 
   app.disable('x-powered-by')
   app.use(express.json())
+  app.use(cookieParser())
 
   app.use(API_PREFIX, createV1Router())
 

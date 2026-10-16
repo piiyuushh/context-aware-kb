@@ -14,9 +14,12 @@ Express API (Node, TS)
 ## Frontend (apps/web)
 
 - Next.js App Router, TypeScript, Tailwind.
-- Editor: CodeMirror 6 or TipTap with markdown mode.
+- Editor: CodeMirror 6 (markdown mode) with a sanitized live preview.
 - Graph: react-force-graph or d3-force with canvas rendering.
 - Data fetching: TanStack Query. API client typed from packages/shared.
+- Same-origin API access: `next.config.ts` rewrites `/api/v1/*` to the API
+  (`NEXT_PUBLIC_API_URL`). The API sends no CORS headers and uses cookie auth, so
+  the browser must stay on the web origin.
 - Real-time: SSE subscription for note and sync events.
 
 ## Backend (apps/api)

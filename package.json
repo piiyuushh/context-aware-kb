@@ -21,7 +21,9 @@
     "test": "npm run test --workspaces --if-present",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "db:migrate": "node -e \"console.log('Migrations are introduced in Phase 1 (see docs/DATABASE.md).')\""
+    "db:migrate": "npm run db:migrate -w apps/api",
+    "db:migrate:down": "npm run db:migrate:down -w apps/api",
+    "db:migrate:create": "npm run db:migrate:create -w apps/api"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
