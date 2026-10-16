@@ -1,0 +1,26 @@
+{
+  "name": "@kb/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Express + TypeScript API for the knowledge base.",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kb/shared": "*",
+    "express": "^5.3.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.0.0",
+    "@types/supertest": "^7.2.1",
+    "supertest": "^7.3.1",
+    "tsx": "^4.23.15",
+    "vitest": "^3.2.7"
+  }
+}

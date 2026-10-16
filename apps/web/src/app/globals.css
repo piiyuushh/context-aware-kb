@@ -1,0 +1,48 @@
+@import 'tailwindcss';
+
+/*
+ * Tailwind v4 design tokens. Dark-first palette: the app is canvas-heavy
+ * (knowledge graph, markdown editor) so the default surface is dark and the
+ * accent is a high-contrast sky tone.
+ */
+@theme {
+  --color-canvas: #0b0f14;
+  --color-surface: #131a24;
+  --color-surface-raised: #1b2431;
+  --color-line: #27374a;
+  --color-line-strong: #3a4d63;
+  --color-ink: #e7eef7;
+  --color-ink-muted: #a3b4c8;
+  --color-ink-subtle: #7b8da3;
+  --color-accent: #7dd3fc;
+  --color-accent-strong: #38bdf8;
+  --color-accent-ink: #06121b;
+  --color-link: #8be0b0;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+}

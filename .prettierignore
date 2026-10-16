@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+package-lock.json
+next-env.d.ts
+
+# Hand-written specs and agent config keep their own markdown style.
+docs/
+.opencode/
