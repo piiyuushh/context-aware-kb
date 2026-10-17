@@ -4,8 +4,8 @@ Next.js (App Router) frontend for the Context-Aware Developer Knowledge Base.
 
 It signs you in through GitHub, keeps your notes in a sidebar, edits them in a
 CodeMirror 6 markdown editor with a live, sanitized preview and autosave, searches
-them from a `⌘K` command palette, and maps their links in an interactive
-force-directed graph.
+them from a `⌘K` command palette, maps their links in an interactive
+force-directed graph, and imports markdown from your gists and repositories.
 
 ## Requirements
 
@@ -24,18 +24,20 @@ Run from the repo root, or from `apps/web`:
 | `npm run start -w apps/web`     | Serve the production build on port 3000                 |
 | `npm run lint -w apps/web`      | ESLint with the root flat config                        |
 | `npm run typecheck -w apps/web` | `tsc --noEmit`                                          |
+| `npm run test:e2e -w apps/web`  | Playwright e2e suite (starts the dev server itself)     |
 
 `npm run dev` at the root starts web and API together via `concurrently`.
 
 ## Routes
 
-| Route         | Access | Notes                                                                       |
-| ------------- | ------ | --------------------------------------------------------------------------- |
-| `/`           | public | Server component that `redirect('/notes')`.                                 |
-| `/login`      | public | Dark card with "Sign in with GitHub"; redirects to `/notes` when signed in. |
-| `/notes`      | auth   | Empty state: select a note or create one.                                   |
-| `/notes/[id]` | auth   | Note editor: title, tags, markdown editor, live preview, autosave.          |
-| `/graph`      | auth   | Force-directed graph of notes and links, with filters and a detail pane.    |
+| Route         | Access | Notes                                                                                        |
+| ------------- | ------ | -------------------------------------------------------------------------------------------- |
+| `/`           | public | Server component that `redirect('/notes')`.                                                  |
+| `/login`      | public | Dark card with "Sign in with GitHub"; redirects to `/notes` when signed in.                  |
+| `/notes`      | auth   | Empty state: select a note or create one.                                                    |
+| `/notes/[id]` | auth   | Note editor: title, tags, markdown editor, live preview, autosave, revision history, export. |
+| `/graph`      | auth   | Force-directed graph of notes and links, with filters and a detail pane.                     |
+| `/github`     | auth   | Pick a gist or repo, start an import, and watch live job progress.                           |
 
 Auth gating is **client-side** (`src/components/auth-guard.tsx`). Session state comes
 from `GET /me`, which answers 401 when there is no cookie; the guard then replaces the
@@ -80,6 +82,8 @@ different origin, where the state cookie is not sent and the login fails with 40
 
 ```
 next.config.ts                 reactStrictMode, transpilePackages, /api/v1 proxy rewrite
+playwright.config.ts           Hermetic e2e config; starts the Next dev server itself
+e2e/                           Playwright specs plus the shared page.route API stub
 postcss.config.mjs             Tailwind v4 via @tailwindcss/postcss (no tailwind.config.* needed)
 src/app/globals.css            @import "tailwindcss" plus @theme design tokens (dark-first)
 src/app/layout.tsx             Root layout: metadata, global stylesheet, <Providers>
@@ -90,9 +94,11 @@ src/app/(app)/layout.tsx       AuthGuard + AppShell for every authenticated rout
 src/app/(app)/notes/page.tsx   Empty state
 src/app/(app)/notes/[id]/page.tsx
 src/app/(app)/graph/page.tsx   Graph view
+src/app/(app)/github/page.tsx  GitHub import view
 src/components/                auth-guard, app-shell, command-palette, notes-sidebar, note-list,
-                               tag-list, note-editor, code-mirror-editor, markdown-preview,
-                               user-avatar, graph-explorer, graph-canvas
+                               tag-list, note-editor, note-history, code-mirror-editor,
+                               markdown-preview, user-avatar, graph-explorer, graph-canvas,
+                               github-import, note-source-badge, realtime-bridge
 src/lib/api-client.ts          Typed fetch wrapper: URL building, credentials, zod parsing, ApiError
 src/lib/query-keys.ts          Query key factory
 src/lib/queries.ts             TanStack Query hooks and cache updates
@@ -101,6 +107,16 @@ src/lib/search-snippet.ts      Pure splitter: API snippet markers -> highlighted
 src/lib/use-debounced-value.ts Debounce hook shared by the sidebar and the command palette
 src/lib/use-element-size.ts    ResizeObserver hook that sizes the graph canvas
 ```
+
+## End-to-end tests
+
+`npm run test:e2e -w apps/web` runs Playwright against a `next dev` server that
+`playwright.config.ts` starts (and reuses when one is already on port 3000). The specs are
+hermetic: `e2e/support/mock-api.ts` answers every `/api/v1/*` request with `page.route` from
+one mutable in-memory state, so no API, database or GitHub access is needed — and creating a
+note through the UI really does make it appear in the list and open in its editor. The first
+run needs `npx playwright install chromium`. The suite is deliberately **not** part of
+`npm test`, which stays vitest/unit.
 
 ## Conventions
 
@@ -136,3 +152,22 @@ src/lib/use-element-size.ts    ResizeObserver hook that sizes the graph canvas
   below a zoom threshold — which keeps a 2000-node graph interactive. The search box
   highlights matches (others dim); its list, the legend and the detail pane give the
   canvas a keyboard-accessible counterpart.
+- `/notes/[id]` keeps a revision history (`GET /notes/:id/versions`, newest first). The
+  `History` toggle lists each revision with a `Restore` action behind an alert dialog; a
+  restore writes the returned note into the detail cache (keeping cached tags) and bumps a
+  `reloadKey` on the editor pane, so remounting re-seeds the drafts from the restored body —
+  the pane only reads `note` on mount, which is what keeps autosave state per-note.
+  `Export .md` is a plain same-origin anchor to `GET /notes/:id/export`, so the session cookie
+  rides along and the browser handles the download.
+- `RealtimeBridge` (mounted inside `AuthGuard`, so it only runs with a session) subscribes to
+  `GET /events` with `EventSource` and folds each event into the query cache:
+  `note.updated` revalidates the lists and that note's detail (a delete drops the note's
+  queries instead), `graph.updated` revalidates the graph and tags, and `sync.progress` seeds
+  the job cache and revalidates once the job is `done` (plus one settle refresh, for the same
+  reason `useSyncJob` waits). Reconnection is left to the browser; there is no retry loop.
+- `/github` lists gists and repositories from the API, starts an import, and polls the
+  accepted job every 1.5 s while it is `queued` or `running` (stopping on `done`,
+  `failed` or an error). When it finishes, the note list, tags and graph are
+  invalidated — once immediately and once after a short delay, because the API attaches
+  tags and edges in a follow-up job. Imported notes show a source badge (`Gist`/`Repo`)
+  in the sidebar and the editor header.

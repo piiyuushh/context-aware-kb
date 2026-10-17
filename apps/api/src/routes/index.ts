@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { authRouter } from './auth.routes'
+import { eventsRouter } from './events.routes'
 import { githubRouter } from './github.routes'
 import { graphRouter } from './graph.routes'
 import { healthRouter } from './health.routes'
@@ -23,6 +24,7 @@ export function createV1Router(): Router {
   router.use('/search', searchRouter)
   router.use('/graph', graphRouter)
   router.use('/github', githubRouter)
+  router.use('/events', eventsRouter)
 
   return router
 }

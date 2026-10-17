@@ -160,9 +160,19 @@ export async function listGraphEdges(
 
 /**
  * Note ids reachable from `noteId` within `depth` hops, followed in both
- * directions (a graph view treats links as undirected). The recursive CTE
- * bounds recursion by depth and `union` de-duplicates, so cycles terminate.
- * The start id is always included.
+ * directions (a graph view treats links as undirected).
+ *
+ * The step is two `union` branches — outgoing edges related by
+ * `source_note_id`, incoming edges by `target_note_id` — instead of one join
+ * whose condition is an `or` of both columns: a branch that relates on a single
+ * column can use that column's index, which an `or` cannot. The branches live
+ * in a lateral subquery because Postgres allows exactly one self-reference in
+ * the recursive term; the lateral correlation (`r.note_id`) keeps each branch's
+ * predicate on one column and therefore index-usable.
+ *
+ * `union` de-duplicates `(note_id, depth)` rows across iterations, so a cycle
+ * (or two paths to the same note) terminates within the depth bound. The start
+ * id is always included.
  */
 export async function collectNeighborNoteIds(
   userId: string,
@@ -173,15 +183,18 @@ export async function collectNeighborNoteIds(
     `with recursive reach(note_id, depth) as (
        select $2::uuid, 0
        union
-       select
-         case
-           when l.source_note_id = r.note_id then l.target_note_id
-           else l.source_note_id
-         end,
-         r.depth + 1
-       from note_links l
-       join reach r on l.source_note_id = r.note_id or l.target_note_id = r.note_id
-       where l.user_id = $1 and r.depth < $3
+       select next_note.note_id, r.depth + 1
+       from reach r
+       cross join lateral (
+         select l.target_note_id as note_id
+         from note_links l
+         where l.user_id = $1 and l.source_note_id = r.note_id
+         union
+         select l.source_note_id as note_id
+         from note_links l
+         where l.user_id = $1 and l.target_note_id = r.note_id
+       ) as next_note
+       where r.depth < $3
      )
      select distinct note_id from reach`,
     [userId, noteId, depth],

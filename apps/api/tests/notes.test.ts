@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 import {
   API_PREFIX,
@@ -10,7 +10,9 @@ import {
 import { createApp } from '../src/app'
 import { SESSION_COOKIE_NAME, SESSION_TTL_SECONDS } from '../src/lib/cookies'
 import { createSessionToken } from '../src/lib/session'
+import { subscribeToUserEvents } from '../src/events/bus'
 import { enqueueProcessNote } from '../src/jobs/queue'
+import { insertNoteVersion } from '../src/repositories/note-versions.repository'
 import {
   deleteNote,
   findBacklinks,
@@ -20,6 +22,7 @@ import {
   updateNote,
 } from '../src/repositories/notes.repository'
 import type { Note } from '../src/repositories/notes.repository'
+import type { SseEvent } from '@kb/shared'
 
 vi.mock('../src/repositories/notes.repository', () => ({
   insertNote: vi.fn(),
@@ -30,6 +33,12 @@ vi.mock('../src/repositories/notes.repository', () => ({
   findBacklinks: vi.fn(),
 }))
 
+vi.mock('../src/repositories/note-versions.repository', () => ({
+  insertNoteVersion: vi.fn(),
+  listNoteVersions: vi.fn(),
+  findNoteVersionById: vi.fn(),
+}))
+
 vi.mock('../src/jobs/queue', () => ({
   enqueueProcessNote: vi.fn(),
 }))
@@ -37,6 +46,7 @@ vi.mock('../src/jobs/queue', () => ({
 const NOTES_URL = `${API_PREFIX}/notes`
 const SESSION_SECRET = process.env.SESSION_SECRET ?? ''
 const USER_ID = '3f1b1e3a-1c2d-4e5f-8a9b-0c1d2e3f4a5b'
+const OTHER_USER_ID = '4a2c2f4b-2d3e-4f50-9bac-1d2e3f4a5b6c'
 const NOTE_ID = '11111111-1111-4111-8111-111111111111'
 const OTHER_NOTE_ID = '99999999-9999-4999-8999-999999999999'
 const NOTE_URL = `${NOTES_URL}/${NOTE_ID}`
@@ -264,7 +274,9 @@ describe(`GET ${NOTE_URL}`, () => {
 
 describe(`PATCH ${NOTE_URL}`, () => {
   beforeEach(() => {
+    vi.mocked(findNoteById).mockReset()
     vi.mocked(updateNote).mockReset()
+    vi.mocked(insertNoteVersion).mockReset()
     vi.mocked(enqueueProcessNote).mockReset()
   })
 
@@ -275,6 +287,7 @@ describe(`PATCH ${NOTE_URL}`, () => {
   })
 
   it('responds 200 with the updated note', async () => {
+    vi.mocked(findNoteById).mockResolvedValue(makeNote())
     vi.mocked(updateNote).mockResolvedValue(makeNote({ title: 'Renamed' }))
 
     const response = await request(createApp())
@@ -288,6 +301,7 @@ describe(`PATCH ${NOTE_URL}`, () => {
   })
 
   it('enqueues the link pipeline after an update', async () => {
+    vi.mocked(findNoteById).mockResolvedValue(makeNote())
     vi.mocked(updateNote).mockResolvedValue(makeNote({ id: NOTE_ID }))
 
     await request(createApp())
@@ -299,6 +313,7 @@ describe(`PATCH ${NOTE_URL}`, () => {
   })
 
   it('forwards an explicit null language to the repository', async () => {
+    vi.mocked(findNoteById).mockResolvedValue(makeNote({ language: 'ts' }))
     vi.mocked(updateNote).mockResolvedValue(makeNote({ language: null }))
 
     await request(createApp())
@@ -309,8 +324,52 @@ describe(`PATCH ${NOTE_URL}`, () => {
     expect(vi.mocked(updateNote).mock.calls[0]?.[2].language).toBeNull()
   })
 
+  it('snapshots the previous state before applying a content change', async () => {
+    vi.mocked(findNoteById).mockResolvedValue(
+      makeNote({ title: 'Before', contentMd: 'old body', language: 'ts' }),
+    )
+    vi.mocked(updateNote).mockResolvedValue(makeNote({ title: 'After', contentMd: 'new body' }))
+
+    await request(createApp())
+      .patch(NOTE_URL)
+      .set('Cookie', sessionCookie(USER_ID))
+      .send({ title: 'After', contentMd: 'new body', language: null })
+
+    expect(insertNoteVersion).toHaveBeenCalledWith({
+      userId: USER_ID,
+      noteId: NOTE_ID,
+      title: 'Before',
+      contentMd: 'old body',
+      language: 'ts',
+    })
+  })
+
+  it('writes no version when the patch changes nothing tracked', async () => {
+    vi.mocked(findNoteById).mockResolvedValue(makeNote({ title: 'Same', contentMd: 'same body' }))
+    vi.mocked(updateNote).mockResolvedValue(makeNote({ title: 'Same', contentMd: 'same body' }))
+
+    await request(createApp())
+      .patch(NOTE_URL)
+      .set('Cookie', sessionCookie(USER_ID))
+      .send({ title: 'Same', contentMd: 'same body' })
+
+    expect(insertNoteVersion).not.toHaveBeenCalled()
+  })
+
+  it('writes no version for a type-only change', async () => {
+    vi.mocked(findNoteById).mockResolvedValue(makeNote())
+    vi.mocked(updateNote).mockResolvedValue(makeNote({ type: 'doc' }))
+
+    await request(createApp())
+      .patch(NOTE_URL)
+      .set('Cookie', sessionCookie(USER_ID))
+      .send({ type: 'doc' })
+
+    expect(insertNoteVersion).not.toHaveBeenCalled()
+  })
+
   it('responds 404 NOT_FOUND when the note is missing', async () => {
-    vi.mocked(updateNote).mockResolvedValue(null)
+    vi.mocked(findNoteById).mockResolvedValue(null)
 
     const response = await request(createApp())
       .patch(NOTE_URL)
@@ -319,6 +378,20 @@ describe(`PATCH ${NOTE_URL}`, () => {
 
     expect(response.status).toBe(404)
     expect(errorResponseSchema.parse(response.body).error.code).toBe('NOT_FOUND')
+    expect(updateNote).not.toHaveBeenCalled()
+  })
+
+  it('responds 404 NOT_FOUND instead of writing history for another user\u2019s note', async () => {
+    vi.mocked(findNoteById).mockResolvedValue(null)
+
+    const response = await request(createApp())
+      .patch(NOTE_URL)
+      .set('Cookie', sessionCookie(OTHER_USER_ID))
+      .send({ title: 'Renamed' })
+
+    expect(response.status).toBe(404)
+    expect(insertNoteVersion).not.toHaveBeenCalled()
+    expect(findNoteById).toHaveBeenCalledWith(OTHER_USER_ID, NOTE_ID)
   })
 
   it('responds 400 VALIDATION_ERROR for an empty body', async () => {
@@ -402,5 +475,95 @@ describe(`GET ${NOTE_URL}/backlinks`, () => {
 
     expect(response.status).toBe(404)
     expect(findBacklinks).not.toHaveBeenCalled()
+  })
+})
+
+describe('notes SSE events', () => {
+  const received: SseEvent[] = []
+  let unsubscribe: () => void
+
+  beforeEach(() => {
+    received.length = 0
+    unsubscribe = subscribeToUserEvents(USER_ID, (event) => received.push(event))
+
+    vi.mocked(insertNote).mockReset()
+    vi.mocked(findNoteById).mockReset()
+    vi.mocked(updateNote).mockReset()
+    vi.mocked(deleteNote).mockReset()
+    vi.mocked(insertNoteVersion).mockReset()
+    vi.mocked(enqueueProcessNote).mockReset()
+  })
+
+  afterEach(() => {
+    unsubscribe()
+  })
+
+  it('publishes note.updated with action created on POST', async () => {
+    vi.mocked(insertNote).mockResolvedValue(makeNote({ id: NOTE_ID }))
+
+    await request(createApp())
+      .post(NOTES_URL)
+      .set('Cookie', sessionCookie(USER_ID))
+      .send({ type: 'note', title: 'Hello' })
+
+    expect(received).toEqual([
+      { type: 'note.updated', data: { noteId: NOTE_ID, action: 'created' } },
+    ])
+  })
+
+  it('publishes note.updated with action updated on PATCH', async () => {
+    vi.mocked(findNoteById).mockResolvedValue(makeNote())
+    vi.mocked(updateNote).mockResolvedValue(makeNote({ id: NOTE_ID }))
+
+    await request(createApp())
+      .patch(NOTE_URL)
+      .set('Cookie', sessionCookie(USER_ID))
+      .send({ title: 'Renamed' })
+
+    expect(received).toEqual([
+      { type: 'note.updated', data: { noteId: NOTE_ID, action: 'updated' } },
+    ])
+  })
+
+  it('publishes note.updated with action deleted on DELETE', async () => {
+    vi.mocked(deleteNote).mockResolvedValue(true)
+
+    await request(createApp()).delete(NOTE_URL).set('Cookie', sessionCookie(USER_ID))
+
+    expect(received).toEqual([
+      { type: 'note.updated', data: { noteId: NOTE_ID, action: 'deleted' } },
+    ])
+  })
+
+  it('publishes nothing when the delete found no owned note', async () => {
+    vi.mocked(deleteNote).mockResolvedValue(false)
+
+    const response = await request(createApp())
+      .delete(NOTE_URL)
+      .set('Cookie', sessionCookie(USER_ID))
+
+    expect(response.status).toBe(404)
+    expect(received).toEqual([])
+  })
+
+  it('does not leak events to another user', async () => {
+    const otherReceived: SseEvent[] = []
+    const unsubscribeOther = subscribeToUserEvents(OTHER_USER_ID, (event) =>
+      otherReceived.push(event),
+    )
+
+    try {
+      vi.mocked(insertNote).mockResolvedValue(makeNote({ id: NOTE_ID }))
+
+      await request(createApp())
+        .post(NOTES_URL)
+        .set('Cookie', sessionCookie(USER_ID))
+        .send({ type: 'note', title: 'Hello' })
+
+      expect(received).toHaveLength(1)
+      expect(otherReceived).toEqual([])
+    } finally {
+      unsubscribeOther()
+    }
   })
 })

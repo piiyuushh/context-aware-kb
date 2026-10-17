@@ -70,33 +70,51 @@ export async function findSyncJobById(userId: string, id: string): Promise<SyncJ
 }
 
 /**
- * Flips a queued (or previously failed/running) job to running. Returns false
- * when the row is already `done`, so a duplicate delivery is a no-op. Idempotent
- * across pg-boss retries, including recovering a row left `running` by a crash.
+ * Flips a queued (or previously failed/running) job to running and returns the
+ * updated row, or `null` when the row is already `done` so a duplicate
+ * delivery is a no-op. The caller uses the returned job to publish a
+ * `sync.progress` event. Idempotent across pg-boss retries, including
+ * recovering a row left `running` by a crash.
  */
-export async function markSyncJobRunning(id: string): Promise<boolean> {
-  const { rowCount } = await getPool().query(
-    `update sync_jobs set status = 'running' where id = $1 and status <> 'done'`,
+export async function markSyncJobRunning(id: string): Promise<SyncJob | null> {
+  const { rows } = await getPool().query<SyncJobRow>(
+    `update sync_jobs set status = 'running' where id = $1 and status <> 'done'
+     returning ${SELECT_COLUMNS}`,
     [id],
   )
 
-  return (rowCount ?? 0) > 0
+  const row = rows[0]
+
+  return row ? mapSyncJob(row) : null
 }
 
-/** Checkpoints progress without touching the status. */
-export async function updateSyncJobStats(id: string, stats: SyncJobStats): Promise<void> {
-  await getPool().query(`update sync_jobs set stats = $2 where id = $1`, [id, stats])
+/** Checkpoints progress without touching the status; returns the updated job. */
+export async function updateSyncJobStats(id: string, stats: SyncJobStats): Promise<SyncJob | null> {
+  const { rows } = await getPool().query<SyncJobRow>(
+    `update sync_jobs set stats = $2 where id = $1
+     returning ${SELECT_COLUMNS}`,
+    [id, stats],
+  )
+
+  const row = rows[0]
+
+  return row ? mapSyncJob(row) : null
 }
 
 /** Terminal state: `done` on success, `failed` with a message otherwise. */
 export async function finishSyncJob(
   id: string,
   input: { status: 'done' | 'failed'; stats: SyncJobStats; error?: string | null },
-): Promise<void> {
-  await getPool().query(
+): Promise<SyncJob | null> {
+  const { rows } = await getPool().query<SyncJobRow>(
     `update sync_jobs
      set status = $2, stats = $3, error = $4, finished_at = now()
-     where id = $1`,
+     where id = $1
+     returning ${SELECT_COLUMNS}`,
     [id, input.status, input.stats, input.error ?? null],
   )
+
+  const row = rows[0]
+
+  return row ? mapSyncJob(row) : null
 }

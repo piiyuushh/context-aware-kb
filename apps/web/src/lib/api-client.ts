@@ -4,23 +4,34 @@ import {
   backlinksResponseSchema,
   createNoteInputSchema,
   errorResponseSchema,
+  githubGistListResponseSchema,
+  githubImportInputSchema,
+  githubImportResponseSchema,
+  githubRepoListResponseSchema,
   graphResponseSchema,
   meResponseSchema,
   noteListResponseSchema,
   noteResponseSchema,
+  noteVersionListResponseSchema,
   searchResponseSchema,
+  syncJobResponseSchema,
   tagListResponseSchema,
   tagResponseSchema,
   updateNoteInputSchema,
   type AttachTagInput,
   type CreateNoteInput,
+  type GitHubGist,
+  type GitHubImportInput,
+  type GitHubRepo,
   type GraphQuery,
   type GraphResponse,
   type ListNotesQuery,
   type Note,
   type NoteListResponse,
+  type NoteVersion,
   type SearchQuery,
   type SearchResult,
+  type SyncJob,
   type Tag,
   type UpdateNoteInput,
   type User,
@@ -29,9 +40,10 @@ import {
 /**
  * Minimal structural view of a zod schema. Importing `zod` directly here would
  * add a dependency the web app does not declare; the shared schemas already
- * carry the parse contract we need.
+ * carry the parse contract we need. Exported so other transport code (the SSE
+ * bridge) can validate a payload without reaching for zod itself.
  */
-type ResponseParser<T> = {
+export type ResponseParser<T> = {
   parse: (value: unknown) => T
 }
 
@@ -231,6 +243,42 @@ export async function getBacklinks(id: string, options?: ApiRequestOptions): Pro
   return backlinks
 }
 
+/**
+ * `GET /notes/:id/versions` — the note's stored revisions, newest first. A
+ * version is the state the note was being changed away from, so the newest
+ * entry is what the current body replaced.
+ */
+export async function listNoteVersions(
+  id: string,
+  options?: ApiRequestOptions,
+): Promise<NoteVersion[]> {
+  const { versions } = await requestJson(
+    `${notePath(id)}/versions`,
+    noteVersionListResponseSchema,
+    options,
+  )
+  return versions
+}
+
+/** `POST /notes/:id/versions/:versionId/restore` — returns the restored note. */
+export async function restoreNoteVersion(id: string, versionId: string): Promise<Note> {
+  const { note } = await requestJson(
+    `${notePath(id)}/versions/${encodeURIComponent(versionId)}/restore`,
+    noteResponseSchema,
+    { method: 'POST' },
+  )
+  return note
+}
+
+/**
+ * Same-origin download URL for `GET /notes/:id/export`. Meant for a plain
+ * anchor with `download`: the browser navigates with the session cookie, so the
+ * API never needs CORS or a token in the URL.
+ */
+export function noteExportUrl(id: string): string {
+  return `${API_PREFIX}${notePath(id)}/export`
+}
+
 /** `GET /tags` — alphabetical. */
 export async function listTags(options?: ApiRequestOptions): Promise<Tag[]> {
   const { tags } = await requestJson('/tags', tagListResponseSchema, options)
@@ -287,4 +335,39 @@ export async function getGraph(
       limit: filters.limit,
     },
   })
+}
+
+/** `GET /github/gists` — the caller's gists, newest first. */
+export async function listGists(options?: ApiRequestOptions): Promise<GitHubGist[]> {
+  const { gists } = await requestJson('/github/gists', githubGistListResponseSchema, options)
+  return gists
+}
+
+/** `GET /github/repos` — repositories the token can see, most recently updated first. */
+export async function listRepos(options?: ApiRequestOptions): Promise<GitHubRepo[]> {
+  const { repos } = await requestJson('/github/repos', githubRepoListResponseSchema, options)
+  return repos
+}
+
+/**
+ * `POST /github/import` — queues an import and returns the accepted job, which
+ * is then polled by id. A 400 means GitHub is not connected; a 404 means the
+ * gist/repo is missing or private to the token.
+ */
+export async function startGithubImport(input: GitHubImportInput): Promise<SyncJob> {
+  const { job } = await requestJson('/github/import', githubImportResponseSchema, {
+    method: 'POST',
+    body: githubImportInputSchema.parse(input),
+  })
+  return job
+}
+
+/** `GET /github/jobs/:id` — the polling endpoint for a background import. */
+export async function getSyncJob(id: string, options?: ApiRequestOptions): Promise<SyncJob> {
+  const { job } = await requestJson(
+    `/github/jobs/${encodeURIComponent(id)}`,
+    syncJobResponseSchema,
+    options,
+  )
+  return job
 }

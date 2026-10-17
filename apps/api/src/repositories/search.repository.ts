@@ -43,17 +43,20 @@ const HEADLINE_OPTIONS = [
  * Ranked full-text search across one user's notes.
  *
  * The term goes through `plainto_tsquery`, so user input is parsed as words,
- * never as tsquery syntax (no `&`/`|`/`!` injection). The tsquery expression is
- * written inline in the three places that consume it (the `@@` filter,
- * `ts_rank_cd`, `ts_headline`) rather than selected through a CTE: grouping by a
- * `tsquery` column would lean on that type's btree opclass, whereas grouping by
- * the note's primary key alone is enough — Postgres treats every other `n.*`
- * column as functionally dependent on it.
+ * never as tsquery syntax (no `&`/`|`/`!` injection).
+ *
+ * Ranking and the `limit` happen in the `matched` CTE, before any note is
+ * joined: `ts_headline` is the expensive part and it now runs only for the page
+ * that is actually returned instead of for every match. The CTE selects `n.id`
+ * and the rank only, so it needs no grouping; the outer query keeps the plain
+ * note joins and groups by the note's primary key for the tag aggregation
+ * (Postgres treats every other `n.*` column as dependent on it) plus `m.rank`,
+ * which comes from the CTE and is therefore not covered by that dependency.
  *
  * Filtering by tag uses `exists` (the same shape as `listNotes`) so it never
- * changes the join cardinality and `group by n.id` stays valid. `rank` is cast
- * to `double precision` so the pg driver parses it to a JS number for
- * `searchResultSchema`; ties fall back to recency then id for a stable order.
+ * changes the join cardinality. `rank` is cast to `double precision` so the pg
+ * driver parses it to a JS number for `searchResultSchema`; ties fall back to
+ * recency then id for a stable order.
  */
 export async function searchNotes(userId: string, filter: SearchNotesFilter): Promise<SearchHit[]> {
   const values: unknown[] = [userId, filter.q, HEADLINE_OPTIONS]
@@ -81,8 +84,16 @@ export async function searchNotes(userId: string, filter: SearchNotesFilter): Pr
   const limit = bind(filter.limit)
 
   const { rows } = await getPool().query<SearchRow>(
-    `select ${NOTE_COLUMNS},
-            ts_rank_cd(n.search, plainto_tsquery('english', $2))::double precision as rank,
+    `with matched as (
+       select n.id,
+              ts_rank_cd(n.search, plainto_tsquery('english', $2)) as rank
+       from notes n
+       where ${conditions.join(' and ')}
+       order by rank desc, n.updated_at desc, n.id desc
+       limit ${limit}
+     )
+     select ${NOTE_COLUMNS},
+            m.rank::double precision as rank,
             ts_headline(
               'english',
               coalesce(nullif(n.content_md, ''), n.title),
@@ -90,10 +101,10 @@ export async function searchNotes(userId: string, filter: SearchNotesFilter): Pr
               $3
             ) as snippet
      ${NOTE_JOINS}
-     where ${conditions.join(' and ')}
-     group by n.id
-     order by rank desc, n.updated_at desc, n.id desc
-     limit ${limit}`,
+     join matched m on m.id = n.id
+     where n.user_id = $1
+     group by n.id, m.rank
+     order by m.rank desc, n.updated_at desc, n.id desc`,
     values,
   )
 

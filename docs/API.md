@@ -2,7 +2,7 @@
 
 Auth via httpOnly cookie. JSON in, JSON out. Errors: `{ "error": { "code": string, "message": string } }`.
 
-Every path below is relative to the `/api/v1` prefix (`API_PREFIX` in packages/shared). Implemented today: `GET /health`, the auth routes, `GET /me`, notes CRUD and backlinks, the tags routes, `GET /search`, the graph routes (`GET /graph`, `GET /graph/:noteId/neighbors`), and the GitHub sync routes (`GET /github/gists`, `GET /github/repos`, `POST /github/import`, `GET /github/jobs/:id`, `POST /github/webhook`). The rest is the Phase 1+ contract.
+Every path below is relative to the `/api/v1` prefix (`API_PREFIX` in packages/shared). Implemented today: `GET /health`, the auth routes, `GET /me`, notes CRUD, backlinks, versions and export, the tags routes, `GET /search`, the graph routes (`GET /graph`, `GET /graph/:noteId/neighbors`), the GitHub sync routes (`GET /github/gists`, `GET /github/repos`, `POST /github/import`, `GET /github/jobs/:id`, `POST /github/webhook`), and the SSE stream (`GET /events`). The rest is the Phase 1+ contract.
 
 Request/response bodies are described by the zod schemas in packages/shared (`noteSchema`, `tagSchema`, `graphResponseSchema`, and their input/output wrappers); controllers parse against them, so a drift fails loudly rather than silently.
 
@@ -63,12 +63,36 @@ where `type` is `doc | snippet | note`, `source` is `local | gist | repo`, and
                              `contentMd` defaults to `""`. 201 `{ note }`.
 - GET    /notes/:id          200 `{ note }`. 404 if missing.
 - PATCH  /notes/:id          body: any of { type, title, contentMd, language },
-                             at least one. 200 `{ note }`.
+                             at least one. 200 `{ note }`. The note's previous
+                             title/contentMd/language are snapshotted into its
+                             version history first, but only when one of them
+                             actually changes (a no-op repeat, or a `type`-only
+                             change, writes no version).
 - DELETE /notes/:id          204, no body.
 - GET    /notes/:id/backlinks 200 `{ backlinks: Note[] }` — notes that link to
                              this one through an explicit `[[wiki link]]` edge,
                              newest first. Computed (`suggested`) edges are
                              excluded: a backlink is a link the author wrote.
+- GET    /notes/:id/versions  query: limit (1-100, default 50). 200
+                             `{ versions: NoteVersion[] }`, newest first,
+                             validated by `noteVersionListResponseSchema`. A
+                             `NoteVersion` is `{ id, title, contentMd, language,
+                             createdAt }`: a state this note was changed away
+                             from (see docs/DATABASE.md `note_versions`).
+- POST   /notes/:id/versions/:versionId/restore
+                             200 `{ note }` — the restored note. Applies the
+                             version through the normal update path, so the
+                             restore is itself versioned, emits `note.updated`
+                             and rebuilds the note's links. 404 if the version
+                             (or the note) is missing or not the caller's.
+- GET    /notes/:id/export   200 `text/markdown; charset=utf-8`, served as a
+                             `Content-Disposition: attachment` download named
+                             from the note's slugged title (`noteExportFilename`,
+                             falling back to the note id). The body is YAML
+                             frontmatter (title, type, tags, created, updated,
+                             source) followed by a blank line and the note's
+                             markdown body. Not JSON, so no shared response
+                             schema. 404 if the note is missing.
 
 ## Tags
 
@@ -181,7 +205,26 @@ Import is additive only: a markdown file deleted upstream leaves its note in
 place (no tombstone) in this phase.
 
 ## Realtime
-- GET /events                    SSE stream: note.updated, graph.updated, sync.progress
+
+Auth required. `GET /events` is a Server-Sent Events stream of the caller's own
+events; the news is per-user, so a stream never carries another account's data.
+The event name is the SSE `event:` field and the payload is the JSON `data:`
+field, so a browser subscribes with `addEventListener(<name>, …)`. The stream is
+opened with `retry: 3000` and a comment frame (`: keep-alive`) is written every
+25 s; both are SSE stream settings, not events.
+
+- GET /events                 200 `text/event-stream`. Emits:
+  - `note.updated`  `{ noteId, action }` with `action` `created | updated |
+                    deleted` — a note was created, edited, or deleted.
+  - `graph.updated` `{ noteId }` — the `process-note` job rebuilt that note's
+                    tags/edges, so any graph on screen may be stale.
+  - `sync.progress` `{ job }` — a GitHub import was queued, started, checkpointed
+                    or finished; `job` is the same `SyncJob` as
+                    `GET /github/jobs/:id`.
+
+The publisher is in-process, so events reach only streams held by this API
+instance (fine for a single instance). The connection is held until the client
+goes away; the response is never ended by the API and is not compressed.
 
 ## GraphQL
 

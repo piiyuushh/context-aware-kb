@@ -101,3 +101,75 @@ export const noteIdParamsSchema = z.object({
 })
 
 export type NoteIdParams = z.infer<typeof noteIdParamsSchema>
+
+/**
+ * One stored revision of a note (docs/DATABASE.md `note_versions`). A version
+ * captures the editable fields as they were *before* a client edit, so the
+ * newest entry is the state the note is being changed away from, not the
+ * current body.
+ */
+export const noteVersionSchema = z.object({
+  id: z.uuid(),
+  title: z.string(),
+  contentMd: z.string(),
+  language: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+})
+
+export type NoteVersion = z.infer<typeof noteVersionSchema>
+
+export const noteVersionListResponseSchema = z.object({
+  versions: z.array(noteVersionSchema),
+})
+
+export type NoteVersionListResponse = z.infer<typeof noteVersionListResponseSchema>
+
+export const noteVersionResponseSchema = z.object({
+  version: noteVersionSchema,
+})
+
+export type NoteVersionResponse = z.infer<typeof noteVersionResponseSchema>
+
+export const DEFAULT_VERSION_PAGE_SIZE = 50
+export const MAX_VERSION_PAGE_SIZE = 100
+
+/** `GET /notes/:id/versions` query. `limit` arrives as a string, so it is coerced. */
+export const listNoteVersionsQuerySchema = z.object({
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_VERSION_PAGE_SIZE)
+    .default(DEFAULT_VERSION_PAGE_SIZE),
+})
+
+export type ListNoteVersionsQuery = z.infer<typeof listNoteVersionsQuerySchema>
+
+/** Route params for `/notes/:id/versions/:versionId`. */
+export const noteVersionParamsSchema = z.object({
+  id: z.uuid(),
+  versionId: z.uuid(),
+})
+
+export type NoteVersionParams = z.infer<typeof noteVersionParamsSchema>
+
+/** Most characters kept from a title when it becomes an export filename. */
+const EXPORT_SLUG_MAX_LENGTH = 80
+
+/**
+ * Filename (no directory) a note downloads as, e.g. `postgres-tips.md`. The
+ * title is slugified to ASCII so it is safe inside a `Content-Disposition`
+ * header; an untitled or symbol-only title falls back to the note id.
+ */
+export function noteExportFilename(note: Pick<Note, 'id' | 'title'>): string {
+  const slug = note.title
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, EXPORT_SLUG_MAX_LENGTH)
+    .replace(/-+$/g, '')
+
+  return `${slug.length > 0 ? slug : note.id}.md`
+}

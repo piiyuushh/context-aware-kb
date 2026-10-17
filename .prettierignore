@@ -7,6 +7,11 @@ coverage/
 package-lock.json
 next-env.d.ts
 
+# test output (playwright)
+playwright-report/
+test-results/
+blob-report/
+
 # Hand-written specs and agent config keep their own markdown style.
 docs/
 .opencode/

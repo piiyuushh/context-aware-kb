@@ -40,6 +40,7 @@ Modules:
 - links: extract explicit links, compute suggested links
 - graph: return nodes and edges for a user, with filters
 - github: OAuth token storage, gist and repo import, webhooks
+- events: in-process, per-user pub/sub that backs `GET /events`
 - jobs: pg-boss workers
 
 ## Link processing pipeline
@@ -50,6 +51,27 @@ Modules:
 4. Upsert explicit edges (type = `explicit`).
 5. Compute suggested edges (type = `suggested`) from shared tags and text similarity. Store score.
 6. Emit SSE event so the graph updates.
+
+## Realtime
+
+Services publish to a per-user, in-process bus after a write lands (notes
+created/edited/deleted, a note's edges rebuilt, an import advancing). `GET
+/events` subscribes for the session user and streams those as SSE frames
+(`note.updated`, `graph.updated`, `sync.progress`); the web app folds each one
+into the TanStack Query cache, so open tabs converge without polling.
+
+The bus is in-process: a subscriber on another API instance would not see an
+event published here. That is fine while the API runs as one instance; scaling
+it horizontally needs a cross-process bus (Postgres `LISTEN`/`NOTIFY`, or Redis)
+rather than a different shape of the module.
+
+## Version history and export
+
+`notes.service.updateNote` snapshots a note's previous `title`/`content_md`/
+`language` into `note_versions` before overwriting them, so `GET
+/notes/:id/versions` is the list of states the note was changed away from and a
+restore is just another versioned edit. `GET /notes/:id/export` serializes a
+note as a standalone markdown file (YAML frontmatter plus the body).
 
 ## Why Express and not Go (v1)
 

@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_NOTE_PAGE_SIZE,
+  DEFAULT_VERSION_PAGE_SIZE,
   MAX_NOTE_PAGE_SIZE,
   createNoteInputSchema,
+  listNoteVersionsQuerySchema,
   listNotesQuerySchema,
+  noteExportFilename,
   noteSchema,
+  noteVersionSchema,
   updateNoteInputSchema,
 } from './note'
 
@@ -71,5 +75,42 @@ describe('listNotesQuerySchema', () => {
 
   it('rejects an unknown note type', () => {
     expect(listNotesQuerySchema.safeParse({ type: 'bookmark' }).success).toBe(false)
+  })
+})
+
+describe('noteVersionSchema', () => {
+  it('accepts a well-formed version', () => {
+    const version = {
+      id: validNote.id,
+      title: 'Old title',
+      contentMd: 'Old body',
+      language: null,
+      createdAt: new Date().toISOString(),
+    }
+
+    expect(noteVersionSchema.safeParse(version).success).toBe(true)
+  })
+})
+
+describe('listNoteVersionsQuerySchema', () => {
+  it('coerces limit and applies the default', () => {
+    expect(listNoteVersionsQuerySchema.parse({}).limit).toBe(DEFAULT_VERSION_PAGE_SIZE)
+    expect(listNoteVersionsQuerySchema.parse({ limit: '10' }).limit).toBe(10)
+  })
+
+  it('rejects a limit outside the allowed range', () => {
+    expect(listNoteVersionsQuerySchema.safeParse({ limit: '0' }).success).toBe(false)
+  })
+})
+
+describe('noteExportFilename', () => {
+  it('slugifies the title', () => {
+    expect(noteExportFilename({ id: validNote.id, title: 'Postgres Tips & Tricks' })).toBe(
+      'postgres-tips-tricks.md',
+    )
+  })
+
+  it('falls back to the note id when the title has no usable characters', () => {
+    expect(noteExportFilename({ id: validNote.id, title: '///' })).toBe(`${validNote.id}.md`)
   })
 })

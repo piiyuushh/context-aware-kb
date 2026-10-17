@@ -11,6 +11,7 @@ import {
 } from 'react'
 import {
   attachTagInputSchema,
+  noteExportFilename,
   noteIdParamsSchema,
   type Note,
   type UpdateNoteInput,
@@ -18,8 +19,10 @@ import {
 
 import { CodeMirrorEditor } from '@/components/code-mirror-editor'
 import { MarkdownPreview } from '@/components/markdown-preview'
+import { NoteHistory } from '@/components/note-history'
+import { NoteSourceBadge } from '@/components/note-source-badge'
 import { NoteTypeBadge } from '@/components/note-type-badge'
-import { isApiError } from '@/lib/api-client'
+import { isApiError, noteExportUrl } from '@/lib/api-client'
 import { formatNoteDate } from '@/lib/format'
 import { useAddTag, useBacklinks, useNote, useRemoveTag, useUpdateNote } from '@/lib/queries'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
@@ -31,6 +34,10 @@ const RESAVE_DELAY_MS = 200
 /** The preview re-renders markdown, so it lags the editor a little. */
 const PREVIEW_DEBOUNCE_MS = 200
 const MAX_TITLE_LENGTH = 500
+
+/** Shared by the header's secondary actions (history, export, preview). */
+const SECONDARY_BUTTON_CLASS =
+  'border-line-strong bg-surface-raised text-ink hover:bg-surface focus-visible:ring-accent rounded-md border px-2.5 py-1.5 text-xs focus-visible:ring-2'
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
@@ -79,6 +86,11 @@ function NoteNotFound() {
 /** Loads the note, then hands off to a per-note pane so autosave state is fresh. */
 export function NoteEditor({ noteId }: { noteId: string }) {
   const noteQuery = useNote(noteId)
+  // Bumped when a revision is restored: the pane is keyed by it, so remounting
+  // re-seeds the drafts from the note the restore wrote into the cache.
+  const [reloadKey, setReloadKey] = useState(0)
+  // Held here rather than in the pane so the panel survives that remount.
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false)
 
   // A non-uuid id would only ever 400 at the API, so skip straight to not-found.
   if (!noteIdParamsSchema.safeParse({ id: noteId }).success) {
@@ -117,12 +129,29 @@ export function NoteEditor({ noteId }: { noteId: string }) {
     )
   }
 
-  // Keyed so switching notes starts from that note's own draft state; the
-  // unmount cleanup flushes anything unsaved.
-  return <NoteEditorPane key={note.id} note={note} />
+  // Keyed so switching notes starts from that note's own draft state, and so a
+  // restore can force the pane to re-read the note; the unmount cleanup flushes
+  // anything unsaved.
+  return (
+    <NoteEditorPane
+      key={`${note.id}:${reloadKey}`}
+      note={note}
+      isHistoryOpen={isHistoryOpen}
+      onToggleHistory={() => setIsHistoryOpen((open) => !open)}
+      onRestored={() => setReloadKey((key) => key + 1)}
+    />
+  )
 }
 
-function NoteEditorPane({ note }: { note: Note }) {
+type NoteEditorPaneProps = {
+  note: Note
+  isHistoryOpen: boolean
+  onToggleHistory: () => void
+  /** Called after a revision was restored, to remount the pane. */
+  onRestored: () => void
+}
+
+function NoteEditorPane({ note, isHistoryOpen, onToggleHistory, onRestored }: NoteEditorPaneProps) {
   const noteId = note.id
   const updateNote = useUpdateNote()
   const addTag = useAddTag()
@@ -333,6 +362,7 @@ function NoteEditorPane({ note }: { note: Note }) {
       <header className="border-line flex flex-col gap-3 border-b px-4 py-4 sm:px-6">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <NoteTypeBadge type={note.type} />
+          <NoteSourceBadge source={note.source} />
           <time dateTime={note.updatedAt} className="text-ink-subtle text-xs">
             Updated {formatNoteDate(note.updatedAt)}
           </time>
@@ -346,9 +376,30 @@ function NoteEditorPane({ note }: { note: Note }) {
             </p>
             <button
               type="button"
+              aria-pressed={isHistoryOpen}
+              aria-expanded={isHistoryOpen}
+              aria-controls={isHistoryOpen ? 'note-history' : undefined}
+              onClick={onToggleHistory}
+              className={SECONDARY_BUTTON_CLASS}
+            >
+              {isHistoryOpen ? 'Hide history' : 'History'}
+            </button>
+            {/*
+              A plain same-origin anchor, not fetch: the browser sends the
+              session cookie and honours the Content-Disposition attachment.
+            */}
+            <a
+              href={noteExportUrl(noteId)}
+              download={noteExportFilename(note)}
+              className={SECONDARY_BUTTON_CLASS}
+            >
+              Export .md
+            </a>
+            <button
+              type="button"
               aria-pressed={showPreview}
               onClick={() => setShowPreview((visible) => !visible)}
-              className="border-line-strong bg-surface-raised text-ink hover:bg-surface focus-visible:ring-accent rounded-md border px-2.5 py-1.5 text-xs focus-visible:ring-2"
+              className={SECONDARY_BUTTON_CLASS}
             >
               {showPreview ? 'Hide preview' : 'Show preview'}
             </button>
@@ -405,6 +456,8 @@ function NoteEditorPane({ note }: { note: Note }) {
           </p>
         )}
       </header>
+
+      {isHistoryOpen && <NoteHistory noteId={noteId} onRestored={onRestored} />}
 
       <div className={showPreview ? 'grid grid-cols-1 lg:grid-cols-2' : 'grid grid-cols-1'}>
         <section
