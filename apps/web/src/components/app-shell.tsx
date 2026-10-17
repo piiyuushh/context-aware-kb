@@ -128,6 +128,14 @@ export function AppShell({ children }: { children: ReactNode }) {
           >
             Knowledge graph
           </Link>
+          <Link
+            href="/github"
+            onClick={closeSidebar}
+            aria-current={pathname === '/github' ? 'page' : undefined}
+            className="border-line bg-surface-raised text-ink-muted hover:border-line-strong hover:text-ink focus-visible:ring-accent flex w-full items-center gap-2 rounded-md border px-3 py-2 text-sm focus-visible:ring-2"
+          >
+            Import from GitHub
+          </Link>
         </div>
 
         <NotesSidebar onNavigate={closeSidebar} />

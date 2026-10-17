@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { getConfig } from '../config'
 import { HttpError } from '../errors'
+import { publishSyncProgress } from '../events/bus'
 import { decryptToken } from '../lib/crypto'
 import { verifyWebhookSignature } from '../lib/github-signature'
 import { enqueueGithubSync, enqueueProcessNote } from '../jobs/queue'
@@ -72,21 +73,30 @@ export async function listUserRepos(userId: string): Promise<GitHubRepo[]> {
 /**
  * Accepts an import and queues it. Fails fast when GitHub is not connected, so
  * a job row is only created when it can actually run.
+ *
+ * Each state change is published as a `sync.progress` event, so an open stream
+ * sees the job appear immediately instead of waiting for a poll.
  */
 export async function startImport(userId: string, input: GitHubImportInput): Promise<SyncJob> {
   await requireAccessToken(userId)
 
   const kind = input.kind === 'gist' ? 'gist_import' : 'repo_import'
   const job = await insertSyncJob({ userId, kind })
+  publishSyncProgress(userId, job)
 
   try {
     await enqueueGithubSync({ jobId: job.id, userId, kind, ref: input.ref })
   } catch (error) {
-    await finishSyncJob(job.id, {
+    const failed = await finishSyncJob(job.id, {
       status: 'failed',
       stats: emptyStats(),
       error: 'Could not enqueue the sync job',
     })
+
+    if (failed) {
+      publishSyncProgress(userId, failed)
+    }
+
     throw error
   }
 
@@ -159,6 +169,8 @@ export async function handleGitHubWebhook(request: GitHubWebhookRequest): Promis
     }
 
     const job = await insertSyncJob({ userId: importer.userId, kind: 'repo_sync' })
+    publishSyncProgress(importer.userId, job)
+
     try {
       await enqueueGithubSync({
         jobId: job.id,
@@ -170,11 +182,15 @@ export async function handleGitHubWebhook(request: GitHubWebhookRequest): Promis
       queued += 1
     } catch (error) {
       console.error('[api] failed to enqueue repo_sync', error)
-      await finishSyncJob(job.id, {
+      const failed = await finishSyncJob(job.id, {
         status: 'failed',
         stats: emptyStats(),
         error: 'Could not enqueue the sync job',
       })
+
+      if (failed) {
+        publishSyncProgress(importer.userId, failed)
+      }
     }
   }
 
@@ -206,13 +222,18 @@ interface SyncProgress {
   fail(): Promise<void>
 }
 
-function createProgress(jobId: string): SyncProgress {
+function createProgress(jobId: string, userId: string): SyncProgress {
   const stats = emptyStats()
   let sinceFlush = 0
 
+  /** Writes the counters, then tells the user's stream where the job stands. */
   const flush = async (): Promise<void> => {
     sinceFlush = 0
-    await updateSyncJobStats(jobId, { ...stats })
+    const job = await updateSyncJobStats(jobId, { ...stats })
+
+    if (job) {
+      publishSyncProgress(userId, job)
+    }
   }
 
   const bump = async (): Promise<void> => {
@@ -245,18 +266,21 @@ function createProgress(jobId: string): SyncProgress {
 
 /**
  * Runs one import. Marks the job running, imports the files (checkpointing
- * progress), then finishes it `done`. Any fatal error finishes it `failed` and
- * is rethrown so pg-boss records (and may retry) the delivery.
+ * progress and publishing each checkpoint as `sync.progress`), then finishes it
+ * `done`. Any fatal error finishes it `failed` and is rethrown so pg-boss
+ * records (and may retry) the delivery.
  */
 export async function runGithubSync(job: GithubSyncJobData): Promise<void> {
   // A duplicate delivery of an already-finished job has nothing left to do;
-  // the flag is false only when the row is already `done`.
-  const started = await markSyncJobRunning(job.jobId)
-  if (!started) {
+  // `markSyncJobRunning` returns null only when the row is already `done`.
+  const running = await markSyncJobRunning(job.jobId)
+  if (!running) {
     return
   }
 
-  const progress = createProgress(job.jobId)
+  publishSyncProgress(job.userId, running)
+
+  const progress = createProgress(job.jobId, job.userId)
 
   try {
     if (job.kind === 'gist_import') {
@@ -265,14 +289,23 @@ export async function runGithubSync(job: GithubSyncJobData): Promise<void> {
       await importRepo(job, progress)
     }
 
-    await finishSyncJob(job.jobId, { status: 'done', stats: { ...progress.stats } })
+    const done = await finishSyncJob(job.jobId, { status: 'done', stats: { ...progress.stats } })
+
+    if (done) {
+      publishSyncProgress(job.userId, done)
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    await finishSyncJob(job.jobId, {
+    const failed = await finishSyncJob(job.jobId, {
       status: 'failed',
       stats: { ...progress.stats },
       error: message.slice(0, 1000),
     })
+
+    if (failed) {
+      publishSyncProgress(job.userId, failed)
+    }
+
     throw error
   }
 }

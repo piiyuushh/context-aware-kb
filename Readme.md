@@ -14,9 +14,10 @@ Everything is private to one account, and you sign in with your GitHub account �
 there's no separate username and password to look after.
 
 > **Where things stand:** the app works end to end. You can sign in, write and
-> organise notes, search across everything, and explore the connections map.
-> Importing from GitHub and live syncing across browser tabs are still to come.
-> See [docs/ROADMAP.md](docs/ROADMAP.md) for the plan.
+> organise notes, search across everything, follow a note's revision history,
+> export it as markdown, import from GitHub, and watch changes appear live across
+> open tabs. Deployment is the remaining step. See
+> [docs/ROADMAP.md](docs/ROADMAP.md) for the plan.
 
 ## What it does today
 
@@ -37,12 +38,18 @@ there's no separate username and password to look after.
   write yourself (in the form `[[another note]]`) plus suggestions based on
   shared tags or similar wording. The **graph** page draws all of it as an
   interactive map you can zoom, pan, filter, and click through.
+- **Keep every revision** — each edit stores the previous version, so you can
+  open a note's history and roll back to an earlier one.
+- **Take a note with you** — export any note as a markdown file, with a small
+  header of its tags and dates.
+- **Import from GitHub** — bring in your gists and the markdown files from your
+  repositories, with progress shown while a background job runs.
+- **See changes live** — edits, new links and import progress appear in every
+  open tab without a reload.
 
 ## What's coming
 
-- **Import from GitHub** — bring in your gists and the markdown files from your
-  repositories, watch progress while it runs, and refresh them when they change.
-- **Live updates** — see edits appear in every open tab without reloading.
+- **Deploy** — the website on Vercel, and the API and database on Railway or Fly.
 
 ## Who it's for
 
@@ -190,6 +197,14 @@ npm run test -w apps/api     # just the engine (no database or GitHub needed)
 The engine's tests run the code in memory with a stand-in for the database and
 GitHub, so they need neither a real database nor a real GitHub account. That
 keeps the checks fast and reliable on any machine.
+
+The website also has an end-to-end suite that drives a real browser with a
+stubbed API:
+
+```bash
+npx playwright install chromium        # once, to download the browser
+npm run test:e2e -w apps/web           # login, create, search, graph, revisions
+```
 
 ## Settings (environment variables)
 

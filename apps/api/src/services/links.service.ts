@@ -1,5 +1,6 @@
 import { extractKeywords, toKeywordQuery } from '../markdown/keywords'
 import { parseMarkdown } from '../markdown/extract'
+import { publishGraphUpdated } from '../events/bus'
 import { suggestEdges } from '../links/similarity'
 import { findNoteById } from '../repositories/notes.repository'
 import {
@@ -29,6 +30,8 @@ export interface ProcessNoteResult {
  *
  * The whole edge set is replaced atomically, so re-processing after an edit
  * drops links that are no longer present. Idempotent and safe to run twice.
+ * Once the edges are written a `graph.updated` event is published for the
+ * owner, which is what makes an open graph view refresh.
  */
 export async function processNote(userId: string, noteId: string): Promise<ProcessNoteResult> {
   const note = await findNoteById(userId, noteId)
@@ -61,6 +64,9 @@ export async function processNote(userId: string, noteId: string): Promise<Proce
   )
 
   await replaceNoteEdges(userId, note.id, { explicitTargetIds, suggested })
+
+  // The graph changed for this user: any open stream should re-read it.
+  publishGraphUpdated(userId, note.id)
 
   return { explicitEdges: explicitTargetIds.length, suggestedEdges: suggested.length }
 }

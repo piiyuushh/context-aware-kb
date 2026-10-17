@@ -36,8 +36,8 @@ Update status as work completes.
 - [x] Webhook re-sync
 
 ## Phase 5: Realtime and polish
-- [ ] SSE events
-- [ ] Version history
-- [ ] Export
-- [ ] Performance pass
+- [x] SSE events (`GET /events`: note.updated, graph.updated, sync.progress; the web app subscribes and folds them into the query cache)
+- [x] Version history (`note_versions`, `GET /notes/:id/versions`, restore)
+- [x] Export (`GET /notes/:id/export` as a markdown download)
+- [x] Performance pass (search ranks/limits before `ts_headline`; index-usable neighbor walk; ordered `notes` index)
 - [ ] Deploy (web on Vercel, api and db on Railway or Fly)

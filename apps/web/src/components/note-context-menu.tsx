@@ -5,6 +5,7 @@ import * as ContextMenu from '@radix-ui/react-context-menu'
 import { useRef, type KeyboardEvent } from 'react'
 import type { Note } from '@kb/shared'
 
+import { NoteSourceBadge } from '@/components/note-source-badge'
 import { NoteTypeBadge } from '@/components/note-type-badge'
 import { formatNoteDate } from '@/lib/format'
 
@@ -83,6 +84,7 @@ export function NoteContextMenu({
           <span className="truncate text-sm font-medium">{note.title}</span>
           <span className="flex items-center gap-2">
             <NoteTypeBadge type={note.type} />
+            <NoteSourceBadge source={note.source} />
             <time dateTime={note.updatedAt} className="text-ink-subtle text-xs">
               {formatNoteDate(note.updatedAt)}
             </time>

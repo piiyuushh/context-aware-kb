@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getConfig } from '../src/config'
+import { subscribeToUserEvents } from '../src/events/bus'
 import { encryptToken } from '../src/lib/crypto'
 import { findGithubConnectionByUserId } from '../src/repositories/github-connections.repository'
 import { fetchGist, fetchRepoMarkdown } from '../src/github/client'
@@ -14,6 +15,7 @@ import { enqueueProcessNote } from '../src/jobs/queue'
 import { handleGithubSync } from '../src/jobs/github-sync'
 import { runGithubSync } from '../src/services/github-sync.service'
 import type { GithubSyncJobData } from '../src/jobs/github-sync'
+import type { SseEvent, SyncJob } from '@kb/shared'
 
 vi.mock('../src/repositories/github-connections.repository', () => ({
   findGithubConnectionByUserId: vi.fn(),
@@ -78,6 +80,19 @@ function connectedGitHub(): void {
   })
 }
 
+function makeJob(overrides: Partial<SyncJob> = {}): SyncJob {
+  return {
+    id: JOB_ID,
+    kind: 'gist_import',
+    status: 'queued',
+    stats: { total: 0, processed: 0, imported: 0, updated: 0, skipped: 0, failed: 0 },
+    error: null,
+    createdAt: new Date().toISOString(),
+    finishedAt: null,
+    ...overrides,
+  }
+}
+
 beforeEach(() => {
   vi.mocked(findGithubConnectionByUserId).mockReset()
   vi.mocked(fetchGist).mockReset()
@@ -88,9 +103,9 @@ beforeEach(() => {
   vi.mocked(updateSyncJobStats).mockReset()
   vi.mocked(finishSyncJob).mockReset()
   vi.mocked(enqueueProcessNote).mockReset()
-  vi.mocked(markSyncJobRunning).mockResolvedValue(true)
-  vi.mocked(updateSyncJobStats).mockResolvedValue(undefined)
-  vi.mocked(finishSyncJob).mockResolvedValue(undefined)
+  vi.mocked(markSyncJobRunning).mockResolvedValue(makeJob({ status: 'running' }))
+  vi.mocked(updateSyncJobStats).mockResolvedValue(makeJob({ status: 'running' }))
+  vi.mocked(finishSyncJob).mockResolvedValue(makeJob({ status: 'done' }))
   vi.mocked(upsertRepoImport).mockResolvedValue(undefined)
   vi.mocked(enqueueProcessNote).mockResolvedValue(undefined)
   connectedGitHub()
@@ -167,12 +182,41 @@ describe('runGithubSync gist import', () => {
   })
 
   it('does nothing when the job is already done', async () => {
-    vi.mocked(markSyncJobRunning).mockResolvedValue(false)
+    vi.mocked(markSyncJobRunning).mockResolvedValue(null)
 
     await runGithubSync(GIST_JOB)
 
     expect(fetchGist).not.toHaveBeenCalled()
     expect(finishSyncJob).not.toHaveBeenCalled()
+  })
+
+  it('publishes sync.progress on each state change', async () => {
+    const received: SseEvent[] = []
+    const unsubscribe = subscribeToUserEvents(USER_ID, (event) => received.push(event))
+
+    try {
+      vi.mocked(fetchGist).mockResolvedValue({
+        id: 'abc123',
+        description: null,
+        files: [{ filename: 'a.md', content: '# Alpha\n' }],
+      })
+      vi.mocked(upsertSyncedNote).mockResolvedValue({ noteId: NOTE_ID, action: 'imported' })
+
+      await runGithubSync(GIST_JOB)
+
+      // running, then the setTotal checkpoint, then done.
+      expect(received.map((event) => event.type)).toEqual([
+        'sync.progress',
+        'sync.progress',
+        'sync.progress',
+      ])
+      expect(received.at(-1)).toMatchObject({
+        type: 'sync.progress',
+        data: { job: { id: JOB_ID, status: 'done' } },
+      })
+    } finally {
+      unsubscribe()
+    }
   })
 })
 

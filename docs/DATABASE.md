@@ -30,10 +30,32 @@
 - search tsvector (generated from title + content_md)
 - created_at, updated_at timestamptz
 
-Index: GIN on search. Index on (user_id, updated_at). Unique index on
-(user_id, source, source_ref) — the identity of a synced note, so a re-import
-upserts instead of duplicating. Local notes have a null `source_ref` and SQL
-treats nulls as distinct, so they are never constrained by it.
+Index: GIN on search. Index on (user_id, updated_at DESC, id DESC) — the
+ordering every note page, search tie-break and graph node query uses, so those
+reads are index-ordered instead of sorted (it keeps `user_id` leading, so
+per-user lookups are covered too). Unique index on (user_id, source, source_ref)
+— the identity of a synced note, so a re-import upserts instead of duplicating.
+Local notes have a null `source_ref` and SQL treats nulls as distinct, so they
+are never constrained by it.
+
+### note_versions
+- id uuid pk
+- note_id uuid fk notes (cascade)
+- user_id uuid fk users (cascade)
+- title text
+- content_md text
+- language text null
+- created_at timestamptz
+
+Index on (note_id, created_at desc).
+
+Written by the API, never by GitHub sync: before `PATCH /notes/:id` (and a
+restore, which goes through the same update path) overwrites a note, the note's
+current `title`/`content_md`/`language` are snapshotted here. A version is
+therefore a state the note was changed *away from*, and the newest row is the
+state the current body replaced. A patch that changes none of those three fields
+(a repeat of the current values, or a `type`-only change) writes no row.
+Imported notes are upserted by the sync worker and so have no history.
 
 ### tags
 - id uuid pk
@@ -119,10 +141,18 @@ endpoints read it, so neither needs an extra index or migration:
 Both go through `plainto_tsquery` with the term as a bound parameter, so a search
 string is parsed as words, never as tsquery syntax.
 
+`GET /search` ranks and limits in a CTE first, then joins the selected notes back
+to build `rank` and `ts_headline` snippets, so the expensive snippet pass runs
+for the page that is returned rather than for every match.
+
 ## Graph queries
 
 Neighbors within N hops via recursive CTE on note_links, followed in both
-directions. Filter by type, tag, score threshold.
+directions. The recursive step is two `union` branches — outgoing edges related
+by `source_note_id`, incoming edges by `target_note_id` — inside a lateral
+subquery, instead of an `or` over both columns, so each branch can use its own
+index. (They live in the lateral because Postgres permits exactly one
+self-reference in a recursive term.) Filter by type, tag, score threshold.
 
 ## Job queue
 

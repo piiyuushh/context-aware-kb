@@ -7,7 +7,17 @@ import {
   useQueryClient,
   type QueryClient,
 } from '@tanstack/react-query'
-import type { AttachTagInput, CreateNoteInput, Note, NoteListResponse, Tag } from '@kb/shared'
+import { useEffect } from 'react'
+import type {
+  AttachTagInput,
+  CreateNoteInput,
+  GitHubImportInput,
+  Note,
+  NoteListResponse,
+  SyncJob,
+  SyncJobStatus,
+  Tag,
+} from '@kb/shared'
 import {
   attachTag,
   createNote,
@@ -17,11 +27,17 @@ import {
   getGraph,
   getMe,
   getNote,
+  getSyncJob,
   isClientError,
+  listGists,
+  listNoteVersions,
   listNotes,
+  listRepos,
   listTags,
   logout,
+  restoreNoteVersion,
   searchNotes,
+  startGithubImport,
   updateNote,
   type GraphFilters,
   type NoteFilters,
@@ -29,6 +45,22 @@ import {
   type UpdateNoteVariables,
 } from './api-client'
 import { queryKeys } from './query-keys'
+
+/** How often an in-flight import is polled. */
+const SYNC_JOB_POLL_MS = 1500
+/**
+ * Grace period after an import finishes before tags/edges are re-read. The
+ * import completes before the API's per-file process-note jobs attach tags and
+ * edges, so the refresh is repeated once those have had a moment to run.
+ */
+export const SYNC_JOB_SETTLE_MS = 2500
+
+/** What an import can change: the note list, the tags and every graph. */
+export function refreshAfterImport(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.notesRoot })
+  void queryClient.invalidateQueries({ queryKey: queryKeys.graphRoot })
+  void queryClient.invalidateQueries({ queryKey: queryKeys.tags })
+}
 
 /** Retry transient failures only: a 4xx will fail again no matter what. */
 export function shouldRetry(failureCount: number, error: unknown): boolean {
@@ -150,6 +182,112 @@ export function useBacklinks(id: string, enabled = true) {
     queryFn: ({ signal }) => getBacklinks(id, { signal }),
     enabled: enabled && id.length > 0,
     retry: shouldRetry,
+  })
+}
+
+/**
+ * A note's stored revisions, newest first. The history panel is only mounted
+ * while it is open, so opening a note costs one request, not two.
+ */
+export function useNoteVersions(id: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.noteVersions(id),
+    queryFn: ({ signal }) => listNoteVersions(id, { signal }),
+    enabled: enabled && id.length > 0,
+    retry: shouldRetry,
+  })
+}
+
+/**
+ * Replaces a note with an older revision. The API returns the restored note, so
+ * it is written straight into the detail cache (keeping the tags already
+ * cached, the same way `useUpdateNote` does) and everything derived from the
+ * note is invalidated.
+ */
+export function useRestoreNoteVersion() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, versionId }: { id: string; versionId: string }) =>
+      restoreNoteVersion(id, versionId),
+    onSuccess: (note) => {
+      queryClient.setQueryData<Note>(queryKeys.noteDetail(note.id), (previous) =>
+        previous ? { ...note, tags: previous.tags } : note,
+      )
+      replaceNoteInLists(queryClient, note)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.notesRoot })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.graphRoot })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.tags })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.noteVersions(note.id) })
+    },
+  })
+}
+
+/** True while a job can still advance, so polling has a reason to continue. */
+function isSyncJobActive(status: SyncJobStatus): boolean {
+  return status === 'queued' || status === 'running'
+}
+
+/** The caller's gists, newest first. */
+export function useGithubGists(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.githubGists,
+    queryFn: ({ signal }) => listGists({ signal }),
+    enabled,
+    retry: shouldRetry,
+  })
+}
+
+/** Repositories the token can see, most recently updated first. */
+export function useGithubRepos(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.githubRepos,
+    queryFn: ({ signal }) => listRepos({ signal }),
+    enabled,
+    retry: shouldRetry,
+  })
+}
+
+/**
+ * A background import, polled while it is queued or running and left alone once
+ * it is done or failed. A finished import invalidates the note list, the tags
+ * and the graph so imported notes appear without a manual refresh.
+ */
+export function useSyncJob(id: string, enabled = true) {
+  const queryClient = useQueryClient()
+  const jobQuery = useQuery({
+    queryKey: queryKeys.syncJob(id),
+    queryFn: ({ signal }) => getSyncJob(id, { signal }),
+    enabled: enabled && id.length > 0,
+    retry: shouldRetry,
+    refetchInterval: (query) => {
+      // A failed poll stops the loop; the panel's "Try again" refetches by hand.
+      if (query.state.error) return false
+      const job = query.state.data
+      // Poll until the first response lands, then only while progress is left.
+      if (job === undefined || isSyncJobActive(job.status)) return SYNC_JOB_POLL_MS
+      return false
+    },
+  })
+
+  const status = jobQuery.data?.status
+  useEffect(() => {
+    if (status !== 'done') return
+    refreshAfterImport(queryClient)
+    const settle = window.setTimeout(() => refreshAfterImport(queryClient), SYNC_JOB_SETTLE_MS)
+    return () => window.clearTimeout(settle)
+  }, [status, queryClient])
+
+  return jobQuery
+}
+
+export function useStartImport() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: GitHubImportInput) => startGithubImport(input),
+    // Seed the job cache so the progress panel renders the accepted job at once.
+    onSuccess: (job) => {
+      queryClient.setQueryData<SyncJob>(queryKeys.syncJob(job.id), job)
+    },
   })
 }
 
